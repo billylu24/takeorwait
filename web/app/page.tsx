@@ -37,7 +37,12 @@ export default function Home() {
   return (
     <>
       <section className="hero">
-        <h1>Take it now, with this instructor, or wait?</h1>
+        <div className="kicker">
+          <b>// 00</b> UCSB course decision terminal
+        </div>
+        <h1>
+          Take it <span>now</span>, with this instructor, or <span>wait</span>?
+        </h1>
         <p className="lede">
           A course page tells you “82% A”. It can’t tell you whether that’s high <em>for this course</em>, whether it
           reflects the instructor or just the era, or whether it rests on one offering or fifteen. This tool compares
@@ -57,18 +62,22 @@ export default function Home() {
 
       <div className="stat-row">
         <div className="card stat">
+          <span className="idx">01</span>
           <div className="v">{num(m.courses)}</div>
           <div className="l">courses with letter-graded offerings</div>
         </div>
         <div className="card stat">
+          <span className="idx">02</span>
           <div className="v">{(total / 1e6).toFixed(2)}M</div>
           <div className="l">letter grades, {m.source.first}–{m.source.last}</div>
         </div>
         <div className="card stat">
+          <span className="idx">03</span>
           <div className="v">{num(known)}</div>
           <div className="l">courses with enough repeat instructors to test whether instructor matters</div>
         </div>
         <div className="card stat">
+          <span className="idx">04</span>
           <div className="v">{num(m.sensitivity_labels.large ?? 0)}</div>
           <div className="l">of those where it clearly matters a lot</div>
         </div>

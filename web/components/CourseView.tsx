@@ -92,7 +92,9 @@ export default function CourseView({ c }: { c: Course }) {
       </div>
       <div className="course-head">
         <div>
-          <div className="eyebrow">{c.dept}</div>
+          <div className="kicker">
+            <b>// Course file</b> {c.dept}
+          </div>
           <h1>{c.code}</h1>
           <p className="facts">
             {s.regular_offerings} regular-quarter offerings

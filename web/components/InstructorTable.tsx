@@ -155,7 +155,7 @@ export default function InstructorTable({ course, colored }: { course: Course; c
         “Adjusted” = the instructor’s expected {what} for a typical offering at this course’s {course.current_era} grading
         level, shrunk toward the course average when they have few offerings. Dark bar: 90% interval for that expectation.
         {metric === "a" && " Light band: 90% range for a single next offering (offerings vary even with the same instructor)."}{" "}
-        Grey line: typical instructor. Raw = pooled over all their regular-quarter offerings, unadjusted.
+        Yellow line: typical instructor. Raw = pooled over all their regular-quarter offerings, unadjusted.
       </p>
     </div>
   );
