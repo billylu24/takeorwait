@@ -1,0 +1,12 @@
+name: project-for-acm
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy
+  - pandas
+  - pyarrow
+  - python-duckdb
+  - scipy
+  - pytest
+  - ruff

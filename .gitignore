@@ -1,0 +1,17 @@
+# private notes: goals, application strategy, people
+notes/
+
+# downloaded data
+data/raw/
+
+# env / tooling
+.env
+.env.*
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+.idea/
+node_modules/
+.next/
+.vercel/
