@@ -10,12 +10,12 @@ Started 2026-11-05. Target: a deployed, usable version by the end of week 1 and 
 
 ## Week 1 — minimum shippable version
 
-- [ ] Era-adjusted instructor model with intervals (methodology §1–2)
-- [ ] Instructor-sensitivity score, cross-validated (methodology §3)
-- [ ] Build step: per-course static JSON artifacts + manifest
-- [ ] Next.js site: course search, course page (history chart, instructor table with intervals, sensitivity badge), "Open in UCSBPlat" link
+- [x] Era-adjusted instructor model with intervals (methodology §1–2)
+- [x] Instructor-sensitivity score, cross-validated (methodology §3)
+- [x] Build step: per-course static JSON artifacts + manifest
+- [x] Next.js site: course search, course page (history chart, instructor table with intervals, sensitivity badge), "Open in UCSBPlat" link
 - [ ] Deploy to Vercel; check in an incognito window
-- [ ] README with screenshots, method summary, data license
+- [ ] README with screenshots, method summary, data license (method + data done; screenshots after deploy)
 - [ ] **v1 public**: deployed URL linked from the README
 
 ## Week 2 — the differentiators

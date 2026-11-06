@@ -22,6 +22,8 @@ A UCSB course decision tool (working title TakeOrWait) built on Daily Nexus / Re
 - `./scripts/fetch_nexus.sh` downloads data to `data/raw/` (gitignored) with SHA-256 checksums.
 - Analysis scripts import `load.py` by relative module name, so run them from `analysis/`: `cd analysis && python prof_compare.py "CMPSC 24"`.
 - Save dated analysis outputs to `docs/findings/YYYY-MM-DD-*.md`.
+- Site data: `cd analysis && python build_site_data.py` regenerates `web/public/data/` (committed; Vercel only runs `next build`).
+- Site: `cd web && npm run dev`, or `npm run build` for the static export in `web/out/`. The `web-static` entry in `.claude/launch.json` serves `web/out/` on port 4321.
 
 ## Data gotchas
 

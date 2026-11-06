@@ -2,7 +2,7 @@
 
 **Should I take this course now, with this instructor, or wait?** A data-driven course decision tool for UC Santa Barbara, built on 17 years of real Registrar grade records.
 
-> Status: early prototype (analysis scripts only). No deployed site yet. See [ROADMAP.md](ROADMAP.md).
+> Status: v1. Static site in `web/` with a page for every course (8,601). Not deployed yet. See [ROADMAP.md](ROADMAP.md).
 
 ## Why
 
@@ -19,21 +19,44 @@ Grading distributions describe grading, not teaching quality. Every number comes
 
 [Daily Nexus grades data](https://github.com/dailynexusdata/grades-data): grade counts obtained from the UCSB Office of the Registrar via Public Records Act requests, Fall 2009 – Summer 2026, free to reuse. No scraped ratings.
 
+## What each course page shows
+
+- **Does the instructor matter here?** For each past offering, predict its A-rate from the era alone and from the era plus the instructor's record in their *other* offerings. The score is the share of prediction error that knowing the instructor removes, with a bootstrap interval. Labelled "matters a lot / somewhat / barely / unclear" from the interval, or "not enough data".
+- **Typical offering now**: the course's A-rate and D/F rate at its current grading era, the range for a new instructor, and how much the same instructor swings between offerings.
+- **Every offering**: each regular and summer offering since 2009 with its 95% interval, era levels behind it.
+- **Instructors compared**: era-adjusted, shrunk estimate of each instructor's A-rate (or D/F rate) with a 90% interval, the range for a single next offering, and P(above typical). Instructors who taught it once are flagged as thin evidence.
+- A link to the course on [UCSBPlat](https://ucsbplat.com) for current sections and registration.
+
+## How it works
+
+```
+Registrar grade counts (Daily Nexus)  ->  analysis/ (Python: pandas, numpy, scipy)  ->  web/public/data/*.json  ->  web/ (Next.js static export)
+```
+
+- `analysis/load.py`: cleaning (padded course codes and names, plus/minus grade totals).
+- `analysis/model.py`: per course, era levels on the logit scale, empirical-Bayes shrinkage of instructor effects, leave-one-out instructor-sensitivity score. Every formula is in [docs/methodology.md](docs/methodology.md).
+- `analysis/build_site_data.py`: one JSON per course plus a search index and a manifest with the source file's SHA-256.
+- `web/`: Next.js + TypeScript, no chart library, no backend. Runs entirely as static files.
+
 ## Quick start
 
 ```bash
 conda env create -f environment.yml
 conda activate project-for-acm
-./scripts/fetch_nexus.sh
-cd analysis
-python prof_compare.py "CMPSC 24" "PHYS 7A"
-python variance_share.py
+./scripts/fetch_nexus.sh                      # data/raw/, with checksums
+cd analysis && python build_site_data.py      # ~2 min, writes web/public/data/
+cd ../web && npm install && npm run dev       # http://localhost:3000
 ```
+
+`npm run build` writes the static site to `web/out/`. On Vercel, set the project root to `web/`; the framework preset (Next.js) needs no other settings.
+
+Prototype scripts: `cd analysis && python prof_compare.py "CMPSC 24"` and `python variance_share.py`.
 
 ## Layout
 
 ```
-analysis/   prototype statistics (load/clean, instructor comparison, variance decomposition)
+analysis/   statistics: load/clean, model, site data export, prototypes
+web/        Next.js site (app/, components/, lib/); generated data in web/public/data/
 scripts/    data fetching
 docs/       product spec, methodology, architecture, dated findings
 data/raw/   downloaded source data (not committed)
@@ -45,4 +68,5 @@ From [docs/findings/2026-11-05-first-look.md](docs/findings/2026-11-05-first-loo
 
 - **Era matters a lot.** CMPSC 24's A-rate went 39% (2009–14) → 82% (2020–21) → 69% (2022–26). Across 660 courses, era explains a median 36% of offering-to-offering variance.
 - **Instructor sensitivity varies by course.** After era adjustment, instructor explains a median 19% of the remaining variance (IQR 6–37%, in-sample upper bound).
-- **Single offerings mislead.** An instructor with one 96% offering ranks at the raw 100th percentile, but the shrunk estimate is 76% ± 14%.
+- **Single offerings mislead.** An instructor with one 96% CMPSC 24 offering ranks at the raw 100th percentile; the era-adjusted, shrunk estimate is 83% with a 90% interval of 67–92%.
+- **Out of sample, instructor usually doesn't predict grading.** Across 1,170 courses with enough repeat instructors, the median cross-validated score is about 0. It is clearly large in 62 courses (e.g. MCDB 1A, MCDB 1B, MATH 6A, WRIT 2) and clearly small in 764 (e.g. CHEM 1A, the PHYS 6 labs, ECON 1). See [docs/findings/2026-11-05-model-v1.md](docs/findings/2026-11-05-model-v1.md).

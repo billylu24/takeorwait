@@ -1,0 +1,40 @@
+{
+  "built_at": "2026-11-06T07:35:13+00:00",
+  "source": {
+    "url": "https://github.com/dailynexusdata/grades-data",
+    "file": "courseGrades.csv",
+    "sha256": "cb8ab64eaff5d550547eb1cbb38b0758e54578d8aa144f0f6240d11be58fe6e2",
+    "fetched_at": "2026-11-06T07:06:14Z",
+    "first": "2009",
+    "last": "2026"
+  },
+  "courses": 8601,
+  "sensitivity_labels": {
+    "insufficient": 7431,
+    "large": 62,
+    "small": 764,
+    "moderate": 89,
+    "unclear": 255
+  },
+  "model": {
+    "K0": 2.0,
+    "DF0": 5.0,
+    "J0": 3.0,
+    "bootstrap": 400,
+    "min_graded": 5,
+    "min_repeat": 3,
+    "min_offerings": 6,
+    "z90": 1.645,
+    "prior_a": {
+      "sw2_0": 0.08918017711067829,
+      "tau2_0": 0.010262499961455757,
+      "n_prior_courses": 1072
+    },
+    "prior_df": {
+      "sw2_0": 0.01,
+      "tau2_0": 0.01,
+      "n_prior_courses": 1072
+    },
+    "interval": "90%"
+  }
+}
