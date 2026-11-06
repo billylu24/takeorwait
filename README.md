@@ -2,7 +2,7 @@
 
 **Should I take this course now, with this instructor, or wait?** A data-driven course decision tool for UC Santa Barbara, built on 17 years of real Registrar grade records.
 
-**Live: https://takeorwait.vercel.app**
+**Live: https://takeorwait.vercel.app** (deploys automatically from `main` via Vercel's GitHub integration; project root `web/`)
 
 > Status: v1, one feature: instructor comparison within a course (8,601 courses). See [ROADMAP.md](ROADMAP.md).
 
