@@ -9,14 +9,16 @@ analysis/build_site_data.py    -> web/public/data/
   model.py  era levels, shrinkage,     index.json            search index
             cross-validated score      manifest.json         source hash, model priors, build time
 web/  Next.js (static export, `output: "export"`)
-  /                 search + campus overview (pre-rendered, reads index/manifest at build)
-  /course/?c=<slug> one client page; fetches courses/<slug>.json
+  /?c=<slug>&i=<instructor>  the archive view; fetches courses/<slug>.json (index.json on search)
+  /course/?c=<slug>          same view, kept for old links
   /about/           method in plain English
 ```
 
 - The JSON is committed, so a Vercel build only runs `next build`; no Python on the host. Rebuild it locally after a data refresh: `cd analysis && python build_site_data.py`.
 - Course pages are fetched on the client rather than pre-rendered. Pre-rendering one page per course embedded each course's data twice (HTML + RSC payload) and produced about 500 MB / 43k files; the client page keeps the deploy at about 40 MB.
-- Charts are hand-written SVG/HTML (no chart library). Instructor colours use the first three slots of a CVD-validated categorical palette; everyone else is grey.
+- The page is one client view (`web/components/archive/`): `ArchiveScene.ts` (Three.js scene: camera, light, drawer, motion, decryption, picking), `cassette.ts` (the instructor file and how its parts encode the numbers), `CourseApp.tsx` (data, state, text panel), `Roll.tsx` (rolling text and masks), `SearchModal.tsx`. `/` and `/course/` both render it and read `?c=` and `?i=`.
+- Post-processing: MSAA render target, bokeh depth of field focused on the selected file, ACES tone mapping. Glass is `MeshPhysicalMaterial` transmission; arcs are full tori that discard fragments outside the shown fraction, so values can sweep.
+- `?debug` exposes the scene as `window.__archive` with `advance(seconds)`, used to screenshot animation states under software WebGL.
 
 ## Target (planned)
 

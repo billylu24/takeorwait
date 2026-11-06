@@ -28,4 +28,4 @@ export const SENSITIVITY_TEXT: Record<SensitivityLabel, { title: string; short: 
   insufficient: { title: "Not enough repeat instructors to tell", short: "Not enough data" },
 };
 
-export const courseHref = (slug: string) => `/course/?c=${encodeURIComponent(slug)}`;
+export const courseHref = (slug: string) => `/?c=${encodeURIComponent(slug)}`;

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { readManifest } from "@/lib/data";
 import { REPO_URL, num } from "@/lib/format";
@@ -9,6 +10,19 @@ export default function About() {
   const m = readManifest();
   const l = m.sensitivity_labels;
   return (
+    <div className="doc">
+      <header className="doc-top">
+        <Link href="/" className="brand" aria-label="TakeOrWait home">
+          <span className="l1">TAKEORWAIT</span>
+          <span className="l2">Synthesize grade records</span>
+          <span className="l3">
+            Analysis<b>UCSB</b>
+          </span>
+        </Link>
+        <Link href="/" className="back caps">
+          <span aria-hidden>←</span> Back to the archive
+        </Link>
+      </header>
     <article className="prose">
       <h1>How it works</h1>
       <p>
@@ -89,5 +103,11 @@ export default function About() {
         <span className="mono">{m.source.sha256.slice(0, 16)}…</span>). {num(m.courses)} course pages.
       </p>
     </article>
+      <footer className="doc-foot">
+        Data: <a href={m.source.url}>Daily Nexus grades data</a> (UCSB Office of the Registrar, via Public Records Act requests),{" "}
+        {m.source.first}–{m.source.last}. Independent student project, not affiliated with UCSB. Visual design after{" "}
+        <a href="https://github.com/LBEILC/RhineLabUI">RhineLabUI</a> (MIT).
+      </footer>
+    </div>
   );
 }
