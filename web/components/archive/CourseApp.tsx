@@ -5,12 +5,12 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { ArchiveScene, webglAvailable } from "./ArchiveScene";
+import { ArchiveScene, webglAvailable, type ColumnSpec } from "./ArchiveScene";
 import type { CassetteData } from "./cassette";
 import Roll, { Masked } from "./Roll";
-import SearchModal from "./SearchModal";
+import SearchModal, { loadIndex } from "./SearchModal";
 import { SENSITIVITY_TEXT, displayName, num, pct, range } from "@/lib/format";
-import type { Course, Instructor, Photos, Upcoming } from "@/lib/types";
+import type { Course, IndexRow, Instructor, Photos, Upcoming } from "@/lib/types";
 
 type Mode = "overview" | "detail";
 type Tab = "position" | "effect" | "notes";
@@ -32,6 +32,73 @@ const signed = (x: number) => (x < 0 ? "<0%" : pct(x));
 function readUrl() {
   const q = new URLSearchParams(window.location.search);
   return { slug: q.get("c") ?? DEFAULT, inst: q.get("i"), scope: (q.get("s") === "next" ? "next" : "all") as Scope };
+}
+
+const courseCache = new Map<string, Promise<Course>>();
+function fetchCourse(slug: string): Promise<Course> {
+  let p = courseCache.get(slug);
+  if (!p) {
+    p = fetch(`/data/courses/${slug}.json`).then((r) => (r.ok ? r.json() : Promise.reject(r.status)));
+    p.catch(() => courseCache.delete(slug));
+    courseCache.set(slug, p);
+  }
+  return p;
+}
+const slugOf = (code: string) => code.replace(/[^A-Za-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+const SIDE = 3; // course columns shown on each side
+
+const rankInstructors = (c: Course) => [...c.instructors].sort((a, b) => b.a.est - a.a.est);
+
+/** The files of one course's column: everyone in its history, or only next quarter's instructors (new ones included). */
+function buildEntries(course: Course, nextRows: Upcoming["courses"][string], view: Scope): Entry[] {
+  const nextSet = new Set(nextRows.map((r) => r.match).filter(Boolean));
+  const hist = rankInstructors(course).map((i, k) => ({
+    key: i.name,
+    name: i.name,
+    inst: i,
+    rank: k + 1,
+    next: nextSet.has(i.name),
+  }));
+  if (view === "all") return hist;
+  const fresh = nextRows
+    .filter((r) => !r.match)
+    .map((r) => ({ key: `new:${r.name}`, name: r.name, inst: null, rank: null, next: true }));
+  const base = course.baseline.a.est;
+  return [...hist.filter((e) => e.next), ...fresh].sort((a, b) => (b.inst?.a.est ?? base) - (a.inst?.a.est ?? base));
+}
+
+function buildFiles(course: Course, entries: Entry[], photos: Photos, quarter: string): CassetteData[] {
+  const b = course.baseline.a;
+  const total = course.instructors.length;
+  return entries.map((e) => {
+    const i = e.inst;
+    const photo = photos[`${course.dept}:${e.name}`];
+    const [last, rest] = splitName(photo?.display ?? e.name);
+    return {
+      name: displayName(e.name),
+      nameLast: photo ? (photo.display.split(" ").slice(-1)[0] ?? last) : last,
+      nameRest: photo ? photo.display.split(" ").slice(0, -1).join(" ") : rest,
+      no: e.rank ?? 0,
+      total: total,
+      est: i ? i.a.est : b.est,
+      lo: i ? i.a.lo : b.lo,
+      hi: i ? i.a.hi : b.hi,
+      pAbove: i ? i.a.p_above : 0.5,
+      typical: b.est,
+      offerings: i ? i.offerings : 0,
+      students: i ? i.students : 0,
+      last: i ? i.last : "",
+      next: e.next,
+      quarter,
+      photo: photo ? `/photos/${photo.file}` : undefined,
+    };
+  });
+}
+
+/** Course number order within a department: CMPSC 5A, 8, 9, 16, 24, ..., 130A, 130B. */
+function courseOrder(code: string) {
+  const m = code.match(/(\d+)([A-Z]*)$/);
+  return m ? Number(m[1]) * 100 + (m[2] ? m[2].charCodeAt(0) - 64 + (m[2].length > 1 ? 0.5 : 0) : 0) : 1e9;
 }
 
 /** "MIRZA D" -> ["MIRZA", "D."]; "ZHOU BOHAN" -> ["ZHOU", "Bohan"] */
@@ -56,64 +123,85 @@ export default function CourseApp() {
   const [scope, setScope] = useState<Scope>("all");
   const [upcoming, setUpcoming] = useState<Upcoming | null>(null);
   const [photos, setPhotos] = useState<Photos>({});
+  const [index, setIndex] = useState<IndexRow[] | null>(null);
+  const [known, setKnown] = useState<Record<string, Course>>({});
+  const slugRef = useRef<string | null>(null);
+  slugRef.current = slug;
   const pendingInst = useRef<string | null>(null);
   const selKey = useRef<string | null>(null);
   const selRef = useRef(0);
   selRef.current = sel;
 
   // ---- ranked files for the current course
-  const ranked = useMemo<Instructor[]>(
-    () => (course ? [...course.instructors].sort((a, b) => b.a.est - a.a.est) : []),
-    [course],
-  );
+  const ranked = useMemo<Instructor[]>(() => (course ? rankInstructors(course) : []), [course]);
   const nextRows = useMemo(() => (slug && upcoming?.courses[slug]) || [], [slug, upcoming]);
   const nextSet = useMemo(() => new Set(nextRows.map((r) => r.match).filter(Boolean)), [nextRows]);
   const canNext = nextRows.length > 0;
   const view: Scope = canNext ? scope : "all";
-
-  const entries = useMemo<Entry[]>(() => {
-    const hist = ranked.map((i, k) => ({ key: i.name, name: i.name, inst: i, rank: k + 1, next: nextSet.has(i.name) }));
-    if (view === "all") return hist;
-    const fresh = nextRows
-      .filter((r) => !r.match)
-      .map((r) => ({ key: `new:${r.name}`, name: r.name, inst: null, rank: null, next: true }));
-    const base = course?.baseline.a.est ?? 0;
-    return [...hist.filter((e) => e.next), ...fresh].sort((a, b) => (b.inst?.a.est ?? base) - (a.inst?.a.est ?? base));
-  }, [ranked, nextSet, nextRows, view, course]);
-
+  const entries = useMemo<Entry[]>(
+    () => (course ? buildEntries(course, nextRows, view) : []),
+    [course, nextRows, view],
+  );
   const latest = useMemo(
     () =>
       entries.reduce((best, e, k) => ((e.inst?.last_t ?? 9999) > (entries[best].inst?.last_t ?? 9999) ? k : best), 0),
     [entries],
   );
   const quarter = upcoming?.quarter ?? "Next quarter";
-  const files = useMemo<CassetteData[]>(() => {
-    if (!course) return [];
-    const b = course.baseline.a;
-    return entries.map((e) => {
-      const i = e.inst;
-      const photo = photos[`${course.dept}:${e.name}`];
-      const [last, rest] = splitName(photo?.display ?? e.name);
-      return {
-        name: displayName(e.name),
-        nameLast: photo ? (photo.display.split(" ").slice(-1)[0] ?? last) : last,
-        nameRest: photo ? photo.display.split(" ").slice(0, -1).join(" ") : rest,
-        no: e.rank ?? 0,
-        total: ranked.length,
-        est: i ? i.a.est : b.est,
-        lo: i ? i.a.lo : b.lo,
-        hi: i ? i.a.hi : b.hi,
-        pAbove: i ? i.a.p_above : 0.5,
-        typical: b.est,
-        offerings: i ? i.offerings : 0,
-        students: i ? i.students : 0,
-        last: i ? i.last : "",
-        next: e.next,
-        quarter,
-        photo: photo ? `/photos/${photo.file}` : undefined,
-      };
-    });
-  }, [entries, course, ranked.length, photos, quarter]);
+  const files = useMemo<CassetteData[]>(
+    () => (course ? buildFiles(course, entries, photos, quarter) : []),
+    [course, entries, photos, quarter],
+  );
+
+  // ---- columns: the department's courses in number order (next quarter view: only those on the schedule)
+  const codeOf = useMemo(() => new Map((index ?? []).map((r) => [r[1], r[0]])), [index]);
+  const deptList = useMemo(() => {
+    if (!course || !index) return [] as string[];
+    const prefix = course.dept + " ";
+    const rows = index.filter((r) => r[0].startsWith(prefix) && !r[0].slice(prefix.length).includes(" "));
+    const shown = view === "next" ? rows.filter((r) => upcoming?.courses[r[1]] || r[1] === slug) : rows;
+    return shown.sort((a, b) => courseOrder(a[0]) - courseOrder(b[0])).map((r) => r[1]);
+  }, [course, index, view, upcoming, slug]);
+  const colPos = slug ? deptList.indexOf(slug) : -1;
+  const around = useMemo(() => {
+    const out: string[] = [];
+    for (let d = -SIDE; d <= SIDE; d++) if (d && deptList[colPos + d]) out.push(deptList[colPos + d]);
+    return out;
+  }, [deptList, colPos]);
+  useEffect(() => {
+    let live = true;
+    for (const s of around)
+      if (!known[s])
+        fetchCourse(s)
+          .then((c) => live && setKnown((k) => (k[s] ? k : { ...k, [s]: c })))
+          .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [around, known]);
+
+  const lastColumns = useRef<ColumnSpec[]>([]);
+  const columns = useMemo<ColumnSpec[]>(() => {
+    // between a slug change and its course arriving, keep the old layout instead of mislabelling it
+    if (!course || !slug || !files.length || slugOf(course.code) !== slug) return lastColumns.current;
+    const out: ColumnSpec[] = [];
+    for (let d = -SIDE; d <= SIDE; d++) {
+      if (d === 0) {
+        out.push({ key: slug, files });
+        continue;
+      }
+      const s2 = colPos >= 0 ? deptList[colPos + d] : undefined;
+      const c2 = s2 ? known[s2] : undefined;
+      if (s2 && c2) {
+        const rows = upcoming?.courses[s2] ?? [];
+        const v2: Scope = view === "next" && rows.length ? "next" : "all";
+        out.push({ key: s2, files: buildFiles(c2, buildEntries(c2, rows, v2), photos, quarter).slice(0, 36) });
+      } else out.push({ key: `pad:${course.dept}:${colPos + d}`, files: null });
+    }
+    return (lastColumns.current = out);
+  }, [course, slug, files, colPos, deptList, known, upcoming, view, photos, quarter]);
+  const columnsRef = useRef(columns);
+  columnsRef.current = columns;
 
   // ---- boot: URL, theme, WebGL
   useEffect(() => {
@@ -125,6 +213,7 @@ export default function CourseApp() {
       .then((r) => (r.ok ? r.json() : null))
       .then(setUpcoming)
       .catch(() => setUpcoming(null));
+    loadIndex().then(setIndex);
     fetch("/photos/manifest.json")
       .then((r) => (r.ok ? r.json() : {}))
       .then(setPhotos)
@@ -146,12 +235,12 @@ export default function CourseApp() {
       return;
     }
     let live = true;
-    fetch(`/data/courses/${slug}.json`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+    fetchCourse(slug)
       .then((c: Course) => {
         if (!live) return;
         setMissing(null);
         setCourse(c);
+        setKnown((k) => (k[slug] ? k : { ...k, [slug]: c }));
         document.title = `${c.code} · TakeOrWait`;
       })
       .catch(() => live && setMissing(slug));
@@ -200,8 +289,16 @@ export default function CourseApp() {
       s = new ArchiveScene(
         stage.current,
         {
-          // clicking the highlighted file opens it; clicking another one highlights it
-          onPick: (i) => (selRef.current === i ? setMode("detail") : setSel(i)),
+          // clicking the highlighted file opens it; another file in the column highlights it;
+          // a file in a side column switches to that course with that instructor highlighted
+          onPick: (i, column) => {
+            if (column === slugRef.current) return selRef.current === i ? setMode("detail") : setSel(i);
+            const f = columnsRef.current.find((c) => c.key === column)?.files?.[i];
+            if (!f) return;
+            pendingInst.current = islug(f.name);
+            setMode("overview");
+            setSlug(column);
+          },
           onReveal: () => setRevealed(true),
         },
         reduced,
@@ -223,10 +320,10 @@ export default function CourseApp() {
   }, [gl, dark]);
 
   useEffect(() => {
-    if (scene.current && files.length) scene.current.setFiles(files, sel);
-    // only when the course (or the scene) changes; selection is pushed below
+    if (scene.current && slug && columns.length) scene.current.setColumns(columns, slug, sel);
+    // only when the columns (or the scene) change; selection is pushed below
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [files, gl, dark]);
+  }, [columns, gl, dark]);
 
   useEffect(() => {
     scene.current?.setSelection(sel, mode);
@@ -242,9 +339,20 @@ export default function CourseApp() {
     window.history.replaceState(null, "", `${window.location.pathname}?${q}`);
   }, [course, slug, mode, sel, entries, view]);
 
+  // up = toward the back of the drawer (up on screen), down = toward the front
   const step = useCallback(
     (d: number) => setSel((s) => Math.max(0, Math.min(entries.length - 1, s + d))),
     [entries.length],
+  );
+  // left / right = the neighbouring course column
+  const moveColumn = useCallback(
+    (d: number) => {
+      const target = colPos >= 0 ? deptList[colPos + d] : undefined;
+      if (!target) return;
+      setMode("overview");
+      setSlug(target);
+    },
+    [colPos, deptList],
   );
 
   // ---- keyboard + wheel
@@ -256,37 +364,50 @@ export default function CourseApp() {
       if (e.key === "/") {
         e.preventDefault();
         setSearch(true);
-      } else if (e.key === "ArrowUp" || e.key === "ArrowLeft") {
-        e.preventDefault();
-        step(-1);
-      } else if (e.key === "ArrowDown" || e.key === "ArrowRight") {
+      } else if (e.key === "ArrowUp") {
         e.preventDefault();
         step(1);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        step(-1);
+      } else if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        moveColumn(-1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        moveColumn(1);
       } else if (e.key === "Enter" && mode === "overview" && !t.closest("a, button")) setMode("detail");
       else if (e.key === "Escape" && mode === "detail") setMode("overview");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [search, step, mode]);
+  }, [search, step, moveColumn, mode]);
 
   useEffect(() => {
     const el = stage.current;
     if (!el) return;
     let acc = 0;
+    let accX = 0;
     let lastStep = 0;
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
       acc += e.deltaY;
+      accX += e.deltaX;
       const now = performance.now();
-      if (Math.abs(acc) > 50 && now - lastStep > 160) {
-        step(Math.sign(acc));
-        acc = 0;
+      if (now - lastStep < 160) return;
+      if (Math.abs(accX) > 60) {
+        moveColumn(Math.sign(accX));
+        acc = accX = 0;
+        lastStep = now;
+      } else if (Math.abs(acc) > 50) {
+        step(-Math.sign(acc)); // wheel down moves down the drawer
+        acc = accX = 0;
         lastStep = now;
       }
     };
     el.addEventListener("wheel", onWheel, { passive: false });
     return () => el.removeEventListener("wheel", onWheel);
-  }, [step]);
+  }, [step, moveColumn]);
 
   const openCourse = (s: string) => {
     setSearch(false);
@@ -621,7 +742,7 @@ export default function CourseApp() {
                 <span className="c-of">/ {pad2(entries.length)}</span>
               </div>
               <div className="c-ticks">
-                <button aria-label="Previous instructor" onClick={() => step(-1)}>
+                <button aria-label="Up the column" onClick={() => step(1)}>
                   ↑
                 </button>
                 <span className="ticks" aria-hidden>
@@ -629,7 +750,7 @@ export default function CourseApp() {
                     <i key={e.key} className={`${i === sel ? "on" : ""}${e.next ? " next" : ""}`} />
                   ))}
                 </span>
-                <button aria-label="Next instructor" onClick={() => step(1)}>
+                <button aria-label="Down the column" onClick={() => step(-1)}>
                   ↓
                 </button>
               </div>
@@ -650,9 +771,31 @@ export default function CourseApp() {
       )}
 
       {mode === "overview" && course && (
-        <div className="hints caps" aria-hidden>
-          <span className="glyph">↑ ↓</span> Switch file <i>/</i> <span className="glyph">↵</span> Open <i>/</i>{" "}
-          <span className="glyph">/</span> Search
+        <div className="colnav">
+          <button className="caps" disabled={!deptList[colPos - 1]} onClick={() => moveColumn(-1)}>
+            <span className="glyph" aria-hidden>
+              ←
+            </span>
+            {codeOf.get(deptList[colPos - 1]) ?? ""}
+          </button>
+          <div className="cn-mid">
+            <small className="caps">
+              Column {pad2(colPos + 1)} / {pad2(deptList.length)}
+            </small>
+            <b>
+              <Roll text={course.code} />
+            </b>
+          </div>
+          <button className="caps" disabled={!deptList[colPos + 1]} onClick={() => moveColumn(1)}>
+            {codeOf.get(deptList[colPos + 1]) ?? ""}
+            <span className="glyph" aria-hidden>
+              →
+            </span>
+          </button>
+          <div className="hints caps" aria-hidden>
+            <span className="glyph">↑ ↓</span> Instructor <i>/</i> <span className="glyph">← →</span> Course <i>/</i>{" "}
+            <span className="glyph">↵</span> Open <i>/</i> <span className="glyph">/</span> Search
+          </div>
         </div>
       )}
 

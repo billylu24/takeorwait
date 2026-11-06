@@ -364,6 +364,8 @@ export class Cassette {
   private photoImg?: HTMLImageElement;
   private blockMat: THREE.MeshStandardMaterial;
   private palette: Palette;
+  private interior: THREE.Object3D[] = [];
+  private lite = false;
   private owned: THREE.Material[] = [];
   data: CassetteData;
   /** shown values, sprung toward data so arcs sweep */
@@ -472,6 +474,20 @@ export class Cassette {
     this.scan.rotation.z = Math.atan2(H * 0.74, W * 0.9);
     this.scan.renderOrder = 2;
 
+    this.interior = [
+      plate,
+      bigTrack,
+      bigArc,
+      band,
+      this.tick,
+      smallTrack,
+      smallArc,
+      ...screws,
+      label,
+      name,
+      photo,
+      lines,
+    ];
     this.group.add(
       this.shell,
       plate,
@@ -574,6 +590,15 @@ export class Cassette {
   }
 
   /** reveal: 0 = frosted (in the drawer), 1 = decrypted (clear to this file's certainty). */
+  /** Side columns: only the frosted shell and the status block (two draw calls instead of sixteen). */
+  setLite(lite: boolean) {
+    if (lite === this.lite) return;
+    this.lite = lite;
+    for (const o of this.interior) o.visible = !lite;
+    this.glass.transmission = lite ? 0 : 0.9;
+    this.glass.needsUpdate = true;
+  }
+
   setReveal(reveal: number, frosted = 0.62) {
     this.glass.userData.glass.uReveal.value = reveal;
     this.glass.userData.glass.uFrost.value = frosted;

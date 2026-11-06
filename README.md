@@ -25,7 +25,7 @@ Grading distributions describe grading, not teaching quality. Every number comes
 
 The site is a single view in the style of an archive terminal (after [RhineLabUI](https://github.com/LBEILC/RhineLabUI), MIT). A Three.js scene renders the course as a drawer of glass files, one per instructor, ranked by era-adjusted A-rate, between lanes of blank files.
 
-- **Course overview**: whether the instructor matters (leave-one-out score with a bootstrap interval and a label), the typical A-rate at the current grading level, and the highlighted instructor. Arrow keys, the wheel or a click move through the drawer; a ripple runs out from the selected file.
+- **Course overview**: whether the instructor matters (leave-one-out score with a bootstrap interval and a label), the typical A-rate at the current grading level, and the highlighted instructor. Each column of the drawer is one course of the department, in course-number order. ↑/↓ (or the wheel) move up and down the current course's instructors; ←/→ slide to the neighbouring course; a click on a side column jumps to that course and instructor. A ripple runs out from the selected file.
 - **Instructor file**: the selected file lifts out, turns to the camera and "decrypts" (a scan line, then the glass clears from the top). Its parts are the data:
   - copper arc on the large ring: era-adjusted A-rate estimate;
   - lighter outer band: its 90% interval;

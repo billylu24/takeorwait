@@ -1,4 +1,5 @@
-// The archive drawer: one lane of instructor cassettes (ranked by era-adjusted A-rate) between lanes of blank files.
+// The archive drawer: one column per course (neighbouring courses of a department side by side); in each column the
+// instructors are ranked by era-adjusted A-rate. The centre column is active; the others slide in from the sides.
 // Camera, lighting and motion follow RhineLabUI's archive scene (MIT, github.com/LBEILC/RhineLabUI): a long lens
 // from far away, a breathing idle wave, a ripple from the selected file, extraction, and a top-down "decryption".
 import * as THREE from "three";
@@ -13,8 +14,8 @@ import { damp, idleWave, selectionWave, smooth, spring, swapWave, type Spring } 
 
 const ROW = 0.62; // spacing between files in a lane (z)
 const LANE = 5.2; // spacing between lanes (x)
-const SIDE_LANES = 2; // blank lanes each side
-const PAD = 14; // blank rows before and after the instructors
+const SIDE_LANES = 4; // lanes drawn each side of the active column (data or blank)
+const PAD = 14; // row offset for the wave phase
 const LIFT_PREVIEW = 0.85;
 const LIFT_DETAIL = 4.05;
 const HEIGHT_PER_A = 2.2; // a 100% A-rate stands 2.2 units out of the drawer
@@ -25,7 +26,7 @@ type Mode = "overview" | "detail";
 
 type Slot = {
   cassette: Cassette;
-  index: number; // position in the ranked list
+  index: number; // position in the column's ranked list
   presence: Spring; // 0 = sunk out of view, 1 = in place
   delay: number;
   leaving: boolean;
@@ -34,8 +35,20 @@ type Slot = {
   yaw: Spring;
 };
 
+/** A column as given by the app: a course key and its ranked files (null = blank lane). */
+export type ColumnSpec = { key: string; files: CassetteData[] | null };
+
+type Column = {
+  key: string;
+  files: CassetteData[] | null;
+  pos: Spring; // lane position relative to the active column (0 = centre)
+  target: number;
+  slots: Slot[];
+  leaving: boolean;
+};
+
 export type SceneEvents = {
-  onPick?: (index: number) => void;
+  onPick?: (index: number, column: string) => void;
   onHover?: (index: number | null) => void;
   onReveal?: () => void;
 };
@@ -51,7 +64,8 @@ export class ArchiveScene {
   private fillers: THREE.InstancedMesh;
   private fillerCount: number;
   private dummy = new THREE.Object3D();
-  private slots: Slot[] = [];
+  private columns: Column[] = [];
+  private active = "";
   private rows = 0;
   private mode: Mode = "overview";
   private selected = 0;
@@ -68,7 +82,7 @@ export class ArchiveScene {
   private pointer = new THREE.Vector2();
   private pointerSmooth = new THREE.Vector2();
   private raycaster = new THREE.Raycaster();
-  private hoverIndex: number | null = null;
+  private hover: { column: string; index: number } | null = null;
   private drag: { x: number; yaw: number } | null = null;
   private dragYaw = spring(0);
   private abort = new AbortController();
@@ -123,7 +137,7 @@ export class ArchiveScene {
     floor.receiveShadow = shadows;
     this.scene.add(floor);
 
-    this.fillerCount = (SIDE_LANES * 2 + 1) * (PAD * 2 + 160);
+    this.fillerCount = (SIDE_LANES * 2 + 2) * 72;
     this.fillers = fillerMesh(this.palette, this.fillerCount, shadows);
     this.scene.add(this.fillers);
 
@@ -143,36 +157,84 @@ export class ArchiveScene {
 
   // ---------------------------------------------------------------- data
 
-  /** Replace the lane's contents. Old files sink, new files rise in a travelling wave. */
-  setFiles(files: CassetteData[], selected: number) {
-    const animate = this.slots.length > 0 && !this.reduced;
-    for (const s of this.slots) {
-      s.leaving = true;
-      s.delay = this.time + (animate ? Math.abs(s.index - this.selected) * 0.012 : 0);
+  /** Lay out the columns (left to right, the active one included). Columns already on screen slide to their new
+   * lane; a column whose files changed swaps them (old files sink, new ones rise in a travelling wave). */
+  setColumns(specs: ColumnSpec[], activeKey: string, selected: number) {
+    const centre = specs.findIndex((c) => c.key === activeKey);
+    const anyOld = this.columns.length > 0;
+    const shifted = anyOld && activeKey !== this.active;
+    const keep = new Set(specs.map((c) => c.key));
+    for (const col of this.columns)
+      if (!keep.has(col.key) && !col.leaving) {
+        col.leaving = true;
+        for (const s of col.slots) this.retire(s, 0);
+      }
+    specs.forEach((spec, i) => {
+      const pos = i - centre;
+      let col = this.columns.find((c) => c.key === spec.key && !c.leaving);
+      if (!col) {
+        // enter from beyond the far side when the drawer is sliding, else in place
+        const from = shifted ? pos + Math.sign(pos || 1) : pos;
+        col = {
+          key: spec.key,
+          files: null,
+          pos: spring(this.reduced ? pos : from),
+          target: pos,
+          slots: [],
+          leaving: false,
+        };
+        this.columns.push(col);
+      }
+      col.target = pos;
+      if (!sameFiles(col.files, spec.files)) this.fill(col, spec.files, spec.key === activeKey ? selected : 0, anyOld);
+    });
+    if (activeKey !== this.active) {
+      this.active = activeKey;
+      this.decryptTime = -1;
+      this.revealed = false;
     }
+    const act = this.activeColumn();
+    this.rows = act?.files?.length ?? 0;
+    this.selected = Math.max(0, Math.min(selected, this.rows - 1));
+    if (!anyOld) this.rail.value = this.selected;
+  }
+
+  private fill(col: Column, files: CassetteData[] | null, selected: number, animate: boolean) {
+    const swap = animate && !this.reduced;
+    for (const s of col.slots) this.retire(s, swap ? Math.abs(s.index - selected) * 0.012 : 0);
+    col.files = files;
     const shadows = this.renderer.shadowMap.enabled;
-    const fresh = files.map((d, index): Slot => {
+    const fresh = (files ?? []).map((d, index): Slot => {
       const cassette = new Cassette(d, this.palette, shadows);
       cassette.setReveal(0);
       this.scene.add(cassette.group);
       return {
         cassette,
         index,
-        presence: spring(animate ? 0 : this.reduced ? 1 : 0),
-        delay: this.time + (animate ? 0.45 : 0.1) + Math.abs(index - selected) * 0.025,
+        presence: spring(this.reduced ? 1 : 0),
+        delay: this.time + (swap ? 0.45 : 0.1) + Math.abs(index - selected) * 0.025,
         leaving: false,
         lift: spring(0),
         hover: spring(0),
         yaw: spring(0),
       };
     });
-    this.slots = [...this.slots.filter((s) => s.leaving), ...fresh];
-    this.rows = files.length;
-    this.selected = Math.min(selected, files.length - 1);
-    if (!animate) this.rail.value = this.selected;
-    this.swapTime = this.time;
-    this.decryptTime = -1;
-    this.revealed = false;
+    col.slots = [...col.slots.filter((s) => s.leaving), ...fresh];
+    if (col.key === this.active || !this.active) {
+      this.swapTime = this.time;
+      this.decryptTime = -1;
+      this.revealed = false;
+    }
+  }
+
+  private retire(s: Slot, delay: number) {
+    if (s.leaving) return;
+    s.leaving = true;
+    s.delay = this.time + delay;
+  }
+
+  private activeColumn() {
+    return this.columns.find((c) => c.key === this.active && !c.leaving);
   }
 
   setSelection(index: number, mode: Mode) {
@@ -193,7 +255,7 @@ export class ArchiveScene {
   /** Highest standing top among nearby files in the lane (so an extracted file never cuts through one). */
   private neighbourTop(index: number) {
     let top = 0;
-    for (const s of this.slots) {
+    for (const s of this.activeColumn()?.slots ?? []) {
       if (s.leaving || s.index === index || Math.abs(s.index - index) > 7) continue;
       top = Math.max(top, s.cassette.data.est * HEIGHT_PER_A);
     }
@@ -201,7 +263,7 @@ export class ArchiveScene {
   }
 
   private live() {
-    return this.slots.filter((s) => !s.leaving);
+    return (this.activeColumn()?.slots ?? []).filter((s) => !s.leaving);
   }
 
   private field(row: number, lane: number) {
@@ -236,37 +298,47 @@ export class ArchiveScene {
     this.pointerSmooth.lerp(this.pointer, 1 - Math.exp(-dt * 3));
     const detail = THREE.MathUtils.clamp(this.detail.value, 0, 1);
 
-    // ---- instructor cassettes
-    for (let i = this.slots.length - 1; i >= 0; i--) {
-      const s = this.slots[i];
-      const c = s.cassette;
-      const isSel = !s.leaving && s.index === this.selected;
-      const started = this.time >= s.delay;
-      damp(s.presence, s.leaving ? (started ? 0 : 1) : started ? 1 : 0, this.reduced ? 40 : 5.5, dt);
-      // Clear the neighbours' tops before turning toward the camera; turn back before descending.
-      const stand = c.data.est * HEIGHT_PER_A;
-      let liftTarget = 0;
-      if (isSel)
-        liftTarget =
-          this.mode === "detail" ? LIFT_DETAIL + Math.max(0, this.neighbourTop(s.index) - stand) : LIFT_PREVIEW;
-      const turning = Math.abs(s.yaw.value) > 0.04 && !(isSel && this.mode === "detail");
-      if (!turning) damp(s.lift, liftTarget, this.reduced ? 40 : isSel && this.mode === "detail" ? 3.6 : 4.5, dt);
-      damp(s.hover, !s.leaving && this.hoverIndex === s.index && !isSel ? 0.22 : 0, 8 * fast, dt);
-      const clear = isSel && this.mode === "detail" ? smooth((s.lift.value - (liftTarget - 1.4)) / 1.2) : 0;
-      damp(s.yaw, -YAW * clear + (isSel ? this.dragYaw.value : 0), this.reduced ? 40 : 5, dt);
-      const row = s.index + PAD;
-      const z = (this.rail.value - s.index) * ROW;
-      const sink = (1 - smooth(s.presence.value)) * -7.5;
-      const y = stand + this.field(row, 0) + s.lift.value + s.hover.value + sink;
-      c.group.position.set(0, y, z);
-      c.group.rotation.set(0, s.yaw.value, 0);
-      c.group.visible = s.presence.value > 0.002 || !s.leaving;
-      c.step(dt, this.reduced ? 60 : isSel ? 3.2 : 6);
-      if (s.leaving && s.presence.value < 0.003 && started) {
-        this.scene.remove(c.group);
-        c.dispose();
-        this.slots.splice(i, 1);
+    // ---- columns slide to their lanes; files in every column
+    for (let ci = this.columns.length - 1; ci >= 0; ci--) {
+      const col = this.columns[ci];
+      damp(col.pos, col.target, this.reduced ? 40 : 4.2, dt);
+      const isActive = col.key === this.active && !col.leaving;
+      for (let i = col.slots.length - 1; i >= 0; i--) {
+        const s = col.slots[i];
+        const c = s.cassette;
+        const isSel = isActive && !s.leaving && s.index === this.selected;
+        const started = this.time >= s.delay;
+        damp(s.presence, s.leaving ? (started ? 0 : 1) : started ? 1 : 0, this.reduced ? 40 : 5.5, dt);
+        // Clear the neighbours' tops before turning toward the camera; turn back before descending.
+        const stand = c.data.est * HEIGHT_PER_A;
+        let liftTarget = 0;
+        if (isSel)
+          liftTarget =
+            this.mode === "detail" ? LIFT_DETAIL + Math.max(0, this.neighbourTop(s.index) - stand) : LIFT_PREVIEW;
+        const turning = Math.abs(s.yaw.value) > 0.04 && !(isSel && this.mode === "detail");
+        if (!turning) damp(s.lift, liftTarget, this.reduced ? 40 : isSel && this.mode === "detail" ? 3.6 : 4.5, dt);
+        const hovered = this.hover?.column === col.key && this.hover.index === s.index;
+        damp(s.hover, !s.leaving && hovered && !isSel ? 0.22 : 0, 8 * fast, dt);
+        const clear = isSel && this.mode === "detail" ? smooth((s.lift.value - (liftTarget - 1.4)) / 1.2) : 0;
+        damp(s.yaw, -YAW * clear + (isSel ? this.dragYaw.value : 0), this.reduced ? 40 : 5, dt);
+        const lane = col.pos.value;
+        const z = (this.rail.value - s.index) * ROW;
+        const sink = (1 - smooth(s.presence.value)) * -7.5;
+        const y = stand + this.field(s.index + PAD, lane) + s.lift.value + s.hover.value + sink;
+        c.group.position.set(lane * LANE, y, z);
+        c.group.rotation.set(0, s.yaw.value, 0);
+        // only files near the visible rows are drawn
+        const near = Math.abs(s.index - this.rail.value) < 34 && Math.abs(lane) < SIDE_LANES + 0.5;
+        c.group.visible = near && (s.presence.value > 0.002 || !s.leaving);
+        c.setLite(!isActive || Math.abs(lane) > 0.5);
+        c.step(dt, this.reduced ? 60 : isSel ? 3.2 : 6);
+        if (s.leaving && s.presence.value < 0.003 && started) {
+          this.scene.remove(c.group);
+          c.dispose();
+          col.slots.splice(i, 1);
+        }
       }
+      if (col.leaving && col.slots.length === 0) this.columns.splice(ci, 1);
     }
 
     // ---- decryption of the extracted file
@@ -290,23 +362,29 @@ export class ArchiveScene {
         c.setReveal(0);
       }
     }
-    for (const s of this.slots)
-      if (s !== sel) {
-        s.cassette.setScan(0, 0);
-        s.cassette.setReveal(0);
-      }
+    for (const col of this.columns)
+      for (const s of col.slots)
+        if (s !== sel) {
+          s.cassette.setScan(0, 0);
+          s.cassette.setReveal(0);
+        }
 
-    // ---- blank files
+    // ---- blank files: every lane, in the rows a column's files do not occupy
     let n = 0;
-    const first = Math.floor(this.rail.value) - PAD - 30;
-    const last = Math.ceil(this.rail.value) + PAD + 40;
-    for (let lane = -SIDE_LANES; lane <= SIDE_LANES; lane++) {
+    const first = Math.floor(this.rail.value) - 30;
+    const last = Math.ceil(this.rail.value) + 40;
+    const lanes: { x: number; rows: number }[] = this.columns
+      .filter((c) => !c.leaving)
+      .map((c) => ({ x: c.pos.value, rows: c.slots.some((sl) => !sl.leaving) ? (c.files?.length ?? 0) : 0 }));
+    const taken = new Set(this.columns.filter((c) => !c.leaving).map((c) => c.target));
+    for (let l = -SIDE_LANES; l <= SIDE_LANES; l++) if (!taken.has(l)) lanes.push({ x: l, rows: 0 });
+    for (const { x, rows } of lanes) {
+      if (Math.abs(x) > SIDE_LANES + 0.5) continue;
       for (let r = first; r <= last && n < this.fillerCount; r++) {
-        if (lane === 0 && r >= 0 && r < this.rows) continue; // instructor slot
+        if (r >= 0 && r < rows) continue; // a file stands here
         const z = (this.rail.value - r) * ROW;
-        const y = this.field(r + PAD, lane) + (lane === 0 ? 0 : 0.0);
-        this.dummy.position.set(lane * LANE, y, z);
-        this.dummy.rotation.set((this.field(r + PAD + 0.5, lane) - this.field(r + PAD - 0.5, lane)) * 0.024, 0, 0);
+        this.dummy.position.set(x * LANE, this.field(r + PAD, x), z);
+        this.dummy.rotation.set((this.field(r + PAD + 0.5, x) - this.field(r + PAD - 0.5, x)) * 0.024, 0, 0);
         this.dummy.updateMatrix();
         this.fillers.setMatrixAt(n++, this.dummy.matrix);
       }
@@ -366,18 +444,24 @@ export class ArchiveScene {
       return;
     }
     this.raycaster.setFromCamera(this.ndc, this.camera);
-    const shells = this.live().map((s) => s.cassette.shell);
+    const shells: THREE.Object3D[] = [];
+    for (const col of this.columns)
+      if (!col.leaving)
+        for (const sl of col.slots) if (!sl.leaving && sl.cassette.group.visible) shells.push(sl.cassette.shell);
     const hit = this.raycaster.intersectObjects(shells, false)[0];
     const c = hit?.object.userData.cassette as Cassette | undefined;
-    const slot = c ? this.live().find((s) => s.cassette === c) : undefined;
-    this.setHover(slot ? slot.index : null);
+    for (const col of this.columns) {
+      const sl = c && col.slots.find((x) => x.cassette === c);
+      if (sl) return this.setHover({ column: col.key, index: sl.index });
+    }
+    this.setHover(null);
   }
 
-  private setHover(i: number | null) {
-    if (i === this.hoverIndex) return;
-    this.hoverIndex = i;
-    this.renderer.domElement.style.cursor = i == null ? "" : "pointer";
-    this.events.onHover?.(i);
+  private setHover(h: { column: string; index: number } | null) {
+    if (h?.column === this.hover?.column && h?.index === this.hover?.index) return;
+    this.hover = h;
+    this.renderer.domElement.style.cursor = h ? "pointer" : "";
+    this.events.onHover?.(h && h.column === this.active ? h.index : null);
   }
 
   private bindInput() {
@@ -414,7 +498,7 @@ export class ArchiveScene {
         down = null;
         if (moved > 6) return;
         this.updateHover();
-        if (this.hoverIndex != null) this.events.onPick?.(this.hoverIndex);
+        if (this.hover) this.events.onPick?.(this.hover.index, this.hover.column);
       },
       { signal },
     );
@@ -435,7 +519,7 @@ export class ArchiveScene {
     this.renderer.setAnimationLoop(null);
     this.abort.abort();
     this.resizeObserver.disconnect();
-    for (const s of this.slots) s.cassette.dispose();
+    for (const col of this.columns) for (const s of col.slots) s.cassette.dispose();
     this.fillers.dispose();
     this.composer.dispose();
     this.renderer.dispose();
@@ -450,4 +534,12 @@ export function webglAvailable() {
   } catch {
     return false;
   }
+}
+
+function sameFiles(a: CassetteData[] | null, b: CassetteData[] | null) {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every(
+    (f, i) => f.name === b[i].name && f.est === b[i].est && f.next === b[i].next && f.photo === b[i].photo,
+  );
 }

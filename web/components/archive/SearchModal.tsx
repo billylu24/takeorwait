@@ -42,6 +42,16 @@ function search(index: IndexRow[], q: string): Hit[] {
 const SUGGEST = ["CMPSC 24", "PHYS 7A", "MATH 4B", "MATH 6A", "CHEM 1A", "ECON 1", "WRIT 2", "PSTAT 120A"];
 
 let cached: IndexRow[] | null = null;
+let loading: Promise<IndexRow[]> | null = null;
+
+/** The course index (search and the department's column order), fetched once per page. */
+export function loadIndex(): Promise<IndexRow[]> {
+  loading ??= fetch("/data/index.json")
+    .then((r) => r.json())
+    .then((rows: IndexRow[]) => (cached = rows))
+    .catch(() => (cached = []));
+  return loading;
+}
 
 export default function SearchModal({ onClose, onOpen }: { onClose: () => void; onOpen: (slug: string) => void }) {
   const [index, setIndex] = useState<IndexRow[] | null>(cached);
@@ -52,13 +62,7 @@ export default function SearchModal({ onClose, onOpen }: { onClose: () => void; 
   useEffect(() => {
     input.current?.focus();
     if (cached) return;
-    fetch("/data/index.json")
-      .then((r) => r.json())
-      .then((rows: IndexRow[]) => {
-        cached = rows;
-        setIndex(rows);
-      })
-      .catch(() => setIndex([]));
+    loadIndex().then(setIndex);
   }, []);
 
   const hits = useMemo<Hit[]>(() => {
