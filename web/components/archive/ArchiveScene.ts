@@ -321,13 +321,13 @@ export class ArchiveScene {
     const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), view).normalize();
     const up = new THREE.Vector3().crossVectors(view, right).normalize();
     const selY = sel ? sel.cassette.group.position.y : 1.5;
-    const span = this.portrait ? THREE.MathUtils.lerp(10, 7, detail) : THREE.MathUtils.lerp(7.6, 6.2, detail);
+    const span = this.portrait ? THREE.MathUtils.lerp(10, 7, detail) : THREE.MathUtils.lerp(7.6, 6.9, detail);
     const width = this.container.clientWidth || 1;
     const height = this.container.clientHeight || 1;
     const pixelScale = height / span;
     // where the selected file should appear on screen (fractions of the canvas)
     const fx = this.portrait ? 0.5 : THREE.MathUtils.lerp(0.36, 0.3, detail);
-    const fy = this.portrait ? 0.5 : THREE.MathUtils.lerp(0.5, 0.5, detail);
+    const fy = this.portrait ? 0.5 : THREE.MathUtils.lerp(0.5, 0.45, detail);
     const target = new THREE.Vector3(0, THREE.MathUtils.lerp(selY + H * 0.62, selY + H / 2, detail), 0);
     target.addScaledVector(right, ((0.5 - fx) * width) / pixelScale);
     target.addScaledVector(up, ((fy - 0.5) * height) / pixelScale);

@@ -25,6 +25,9 @@ A UCSB course decision tool (working title TakeOrWait) built on Daily Nexus / Re
 - Site data: `cd analysis && python build_site_data.py` regenerates `web/public/data/` (committed; Vercel only runs `next build`).
 - Site: `cd web && npm run dev`, or `npm run build` for the static export in `web/out/`. The `web-static` entry in `.claude/launch.json` serves `web/out/` on port 4321.
 
+- Next quarter: `cd analysis && python fetch_upcoming.py 20271 && python build_upcoming.py` (public schedule of classes → `web/public/data/upcoming.json`, committed).
+- Photos: only add a person to `analysis/photo_sources.json` after checking their own official UCSB department page (unique last name in that department, matching initial, course in that department). `python scripts/fetch_photos.py` writes `web/public/photos/` (committed, with source pages in its manifest).
+
 ## Data gotchas
 
 - Course codes and (in 2026 rows) instructor names are space-padded. Always go through `analysis/load.py`.

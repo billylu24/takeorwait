@@ -31,5 +31,6 @@ Started 2026-11-05. Target: a deployed, usable version by the end of week 1 and 
 ## Later
 
 - [ ] Waiting-cost model on the prerequisite graph (LLM-assisted prerequisite parsing + evaluation)
-- [ ] Upcoming-quarter instructors via the UCSB Academic Curriculums API
+- [x] Upcoming-quarter instructors (2026-11-06, from the public schedule of classes; `analysis/fetch_upcoming.py`)
+- [ ] Instructor photos beyond the hand-checked set; decide whether photos ship with the deployed site
 - [ ] Monthly data refresh via GitHub Action

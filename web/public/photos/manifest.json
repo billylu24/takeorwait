@@ -1,0 +1,32 @@
+{
+ "CMPSC:AGRAWAL D": {
+  "file": "cmpsc-agrawal-d.png",
+  "display": "Divyakant Agrawal",
+  "source": "https://cs.ucsb.edu/people/faculty/divyakant-agrawal"
+ },
+ "CMPSC:MAJEDI M": {
+  "file": "cmpsc-majedi-m.png",
+  "display": "Maryam Majedi",
+  "source": "https://cs.ucsb.edu/people/faculty/maryam-majedi"
+ },
+ "CMPSC:MIRZA D": {
+  "file": "cmpsc-mirza-d.png",
+  "display": "Diba Mirza",
+  "source": "https://cs.ucsb.edu/people/faculty/diba-mirza"
+ },
+ "PHYS:FREUND E G": {
+  "file": "phys-freund-e-g.jpg",
+  "display": "Ernest Freund",
+  "source": "https://www.physics.ucsb.edu/people/ernest-freund"
+ },
+ "PHYS:KOUTROULAKIS": {
+  "file": "phys-koutroulakis.jpg",
+  "display": "Georgios Koutroulakis",
+  "source": "https://www.physics.ucsb.edu/people/georgios-koutroulakis"
+ },
+ "PHYS:POPESCU P F": {
+  "file": "phys-popescu-p-f.jpg",
+  "display": "Paula Popescu",
+  "source": "https://www.physics.ucsb.edu/people/paula-popescu"
+ }
+}

@@ -63,3 +63,15 @@ export type Manifest = {
   sensitivity_labels: Record<SensitivityLabel, number>;
   model: Record<string, unknown>;
 };
+
+// web/public/data/upcoming.json, written by analysis/build_upcoming.py
+export type Upcoming = {
+  quarter: string;
+  quarter_code: string;
+  source: string;
+  fetched_at: string;
+  courses: Record<string, { name: string; match: string | null }[]>;
+};
+
+// web/public/photos/manifest.json: "DEPT:REGISTRAR NAME" -> a verified photo from an official UCSB page
+export type Photos = Record<string, { file: string; display: string; source: string }>;

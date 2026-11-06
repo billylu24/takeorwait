@@ -1,5 +1,16 @@
 # Third-party notices
 
+## Instructor photos
+
+The photos in `web/public/photos/` are from each instructor's own page on the official UCSB department website, used to identify the instructor. Copyright remains with the department or photographer; on request a photo is removed.
+
+- Divyakant Agrawal: https://cs.ucsb.edu/people/faculty/divyakant-agrawal
+- Maryam Majedi: https://cs.ucsb.edu/people/faculty/maryam-majedi
+- Diba Mirza: https://cs.ucsb.edu/people/faculty/diba-mirza
+- Ernest Freund: https://www.physics.ucsb.edu/people/ernest-freund
+- Georgios Koutroulakis: https://www.physics.ucsb.edu/people/georgios-koutroulakis
+- Paula Popescu: https://www.physics.ucsb.edu/people/paula-popescu
+
 ## RhineLabUI
 
 The visual design of the archive scene (camera, lighting, cassette form, motion and text effects) follows RhineLabUI,

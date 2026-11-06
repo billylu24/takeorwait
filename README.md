@@ -30,6 +30,8 @@ The site is a single view in the style of an archive terminal (after [RhineLabUI
   - ink tick: a typical (new) instructor in this course;
   - small ring: P(above typical);
   - glass clarity: certainty. A wide interval leaves the glass frosted.
+- **Next quarter**: the small block on top of each file is green if that instructor is on the Winter 2027 schedule (UCSB public schedule of classes, lecture sections), amber if history only. A sliding switch shows either all history or only next quarter's instructors; instructors new to a course appear as files with the model's new-instructor estimate.
+- **Name and photo**: the opened file carries a name plate on the outside of the glass and a small photo frame. Photos are used only when hand-checked against the instructor's own page on the official UCSB department site (see `analysis/photo_sources.json`); they are downloaded by `scripts/fetch_photos.py` into `web/public/photos/`, each with its source page in `manifest.json`. Everyone else gets initials.
 - The text panel repeats every number with sample sizes, and a 2D strip places the instructor among all instructors of the course. Values roll character by character when they change, and are masked until the file is decrypted.
 - Without WebGL, or with reduced motion, the same numbers are shown without the animation. Each course links to [UCSBPlat](https://ucsbplat.com) for sections and registration.
 
@@ -51,6 +53,8 @@ conda env create -f environment.yml
 conda activate project-for-acm
 ./scripts/fetch_nexus.sh                      # data/raw/, with checksums
 cd analysis && python build_site_data.py      # ~2 min, writes web/public/data/
+python fetch_upcoming.py && python build_upcoming.py   # next quarter's instructors (~3 min)
+cd .. && python scripts/fetch_photos.py && cd analysis   # instructor photos (hand-checked list)
 cd ../web && npm install && npm run dev       # http://localhost:3000
 ```
 

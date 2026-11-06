@@ -5,6 +5,8 @@
 //   big ring, ink tick ........... a typical (new) instructor in this course
 //   small ring, copper arc ....... P(above typical)
 //   glass clarity ................ certainty: wide interval = frosted, narrow = clear
+//   block on the top edge ........ green: on next quarter's schedule; amber: history only
+//   name plate + photo ........... who it is (photo only when verified on an official UCSB page)
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 
@@ -12,8 +14,10 @@ export const W = 4.0; // width (x)
 export const H = 3.7; // height (y); origin at the bottom centre
 export const D = 0.42; // thickness (z); the face looks down +z
 
-const BIG = { x: -0.42, y: 1.5, r: 1.0, tube: 0.1 };
-const SMALL = { x: 1.18, y: 2.42, r: 0.4, tube: 0.085 };
+const BIG = { x: -0.5, y: 1.9, r: 0.9, tube: 0.095 };
+const SMALL = { x: 1.3, y: 1.3, r: 0.36, tube: 0.08 };
+const PHOTO = { x: 1.3, y: 2.64, w: 0.62, h: 0.76 };
+const NAME = { x: 0, y: 0.42, w: 3.44, h: 0.5 };
 
 export type CassetteData = {
   name: string;
@@ -26,7 +30,12 @@ export type CassetteData = {
   typical: number;
   offerings: number;
   students: number;
-  last: string;
+  last: string; // last quarter taught ("" for a new instructor)
+  nameLast: string; // name plate: large
+  nameRest: string; // name plate: small (initials or given name)
+  next: boolean; // on next quarter's schedule
+  quarter: string; // next quarter, e.g. "Winter 2027"
+  photo?: string; // same-origin URL, only for verified photos
 };
 
 export type Palette = {
@@ -41,6 +50,8 @@ export type Palette = {
   label: string;
   labelInk: string;
   labelMuted: string;
+  next: string;
+  past: string;
 };
 
 export const LIGHT: Palette = {
@@ -55,6 +66,8 @@ export const LIGHT: Palette = {
   label: "#eae5dc",
   labelInk: "#171713",
   labelMuted: "#77756d",
+  next: "#4f9a62",
+  past: "#c99a45",
 };
 
 export const DARK: Palette = {
@@ -69,6 +82,8 @@ export const DARK: Palette = {
   label: "#2f2c27",
   labelInk: "#ece9e4",
   labelMuted: "#a39f95",
+  next: "#6fbf82",
+  past: "#d6a752",
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -82,29 +97,47 @@ function buildShared() {
   plate.translate(0, H / 2, -D / 2 + 0.07);
   const bigTrack = new THREE.TorusGeometry(BIG.r, BIG.tube, 20, 160);
   const bigArc = new THREE.TorusGeometry(BIG.r, BIG.tube * 1.18, 20, 200);
-  const band = new THREE.RingGeometry(BIG.r + 0.2, BIG.r + 0.3, 200, 1);
+  const band = new THREE.RingGeometry(BIG.r + 0.18, BIG.r + 0.28, 200, 1);
   const smallTrack = new THREE.TorusGeometry(SMALL.r, SMALL.tube, 16, 96);
   const smallArc = new THREE.TorusGeometry(SMALL.r, SMALL.tube * 1.2, 16, 120);
   const tick = new THREE.BoxGeometry(0.035, 0.22, 0.03);
   const screw = new THREE.CylinderGeometry(0.075, 0.075, 0.05, 20);
   screw.rotateX(Math.PI / 2);
-  const block = new THREE.BoxGeometry(0.2, 0.06, 0.16);
-  const label = new THREE.PlaneGeometry(1.12, 0.52);
+  const block = new THREE.BoxGeometry(0.28, 0.07, 0.2);
+  const label = new THREE.PlaneGeometry(1.0, 0.46);
+  const photo = new THREE.PlaneGeometry(PHOTO.w, PHOTO.h);
+  const name = new THREE.PlaneGeometry(NAME.w, NAME.h);
   const scan = new THREE.PlaneGeometry(1, 0.012);
   // engraved guide lines on the plate, like a circuit trace
   const pts: THREE.Vector3[] = [];
   const z = -D / 2 + 0.1;
   const seg = (a: [number, number], b: [number, number]) =>
     pts.push(new THREE.Vector3(a[0], a[1], z), new THREE.Vector3(b[0], b[1], z));
-  seg([-1.75, 0.32], [1.6, 0.32]);
-  seg([1.6, 0.32], [1.75, 0.47]);
-  seg([1.75, 0.47], [1.75, 1.7]);
-  seg([0.66, 2.42], [0.78, 2.42]);
-  seg([-1.75, 3.38], [0.2, 3.38]);
-  seg([0.2, 3.38], [0.32, 3.26]);
-  for (let i = 0; i < 9; i++) seg([0.9 + i * 0.09, 0.5], [0.98 + i * 0.09, 0.66]);
+  seg([-1.75, 0.74], [0.9, 0.74]);
+  seg([0.9, 0.74], [1.02, 0.86]);
+  seg([1.75, 0.78], [1.75, 1.9]);
+  seg([0.92, 1.3], [0.82, 1.3]);
+  seg([-0.7, 3.42], [0.86, 3.42]);
+  seg([0.86, 3.42], [0.98, 3.3]);
+  for (let i = 0; i < 6; i++) seg([1.08 + i * 0.09, 0.78], [1.16 + i * 0.09, 0.9]);
   const lines = new THREE.BufferGeometry().setFromPoints(pts);
-  return { shell, plate, bigTrack, bigArc, band, smallTrack, smallArc, tick, screw, block, label, scan, lines };
+  return {
+    shell,
+    plate,
+    bigTrack,
+    bigArc,
+    band,
+    smallTrack,
+    smallArc,
+    tick,
+    screw,
+    block,
+    label,
+    photo,
+    name,
+    scan,
+    lines,
+  };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -200,31 +233,117 @@ function drawLabel(canvas: HTMLCanvasElement, d: CassetteData, p: Palette) {
   const font = fontFamily();
   ctx.fillStyle = p.label;
   ctx.fillRect(0, 0, w, h);
-  ctx.fillStyle = p.labelMuted;
-  ctx.font = `600 34px ${font}`;
   ctx.textBaseline = "top";
-  const name = d.name.length > 16 ? d.name.slice(0, 15) + "…" : d.name;
+  ctx.fillStyle = p.labelMuted;
+  ctx.font = `600 26px ${font}`;
+  ctx.fillText("INSTRUCTOR FILE", 34, 34);
   ctx.fillStyle = p.labelInk;
-  ctx.font = `500 44px ${font}`;
-  ctx.fillText(name.toUpperCase(), 34, 30);
-  ctx.fillStyle = p.labelInk;
-  ctx.fillRect(w - 150, 30, 116, 22);
+  ctx.fillRect(w - 150, 32, 116, 24);
   ctx.fillStyle = p.label;
-  ctx.font = `700 16px ${font}`;
-  ctx.fillText("FILE", w - 140, 33);
+  ctx.font = `700 17px ${font}`;
+  ctx.fillText(d.no ? "RANKED" : "NEW", w - 138, 36);
   ctx.fillStyle = p.labelMuted;
   ctx.font = `600 22px ${font}`;
-  ctx.fillText(`${d.offerings} OFFERING${d.offerings === 1 ? "" : "S"}`, w - 230, 70);
+  ctx.fillText(`${d.offerings} OFFERING${d.offerings === 1 ? "" : "S"}`, 34, 72);
   ctx.fillStyle = p.labelInk;
   ctx.font = `500 92px ${font}`;
-  ctx.fillText(`NO.${String(d.no).padStart(3, "0")}`, 30, 118);
+  ctx.fillText(d.no ? `NO.${String(d.no).padStart(3, "0")}` : "NO.NEW", 30, 116);
   ctx.strokeStyle = p.labelInk;
   ctx.lineWidth = 4;
   ctx.beginPath();
-  ctx.arc(w - 92, 168, 20, 0, Math.PI * 2);
-  ctx.moveTo(w - 52 + 20, 168);
-  ctx.arc(w - 52, 168, 20, 0, Math.PI * 2);
+  ctx.arc(w - 92, 164, 20, 0, Math.PI * 2);
+  ctx.moveTo(w - 52 + 20, 164);
+  ctx.arc(w - 52, 164, 20, 0, Math.PI * 2);
   ctx.stroke();
+}
+
+/** Bottom name plate: large last name, smaller initials or given name, and the schedule status on the right. */
+function drawName(canvas: HTMLCanvasElement, d: CassetteData, p: Palette) {
+  const ctx = canvas.getContext("2d")!;
+  const w = canvas.width;
+  const h = canvas.height;
+  const font = fontFamily();
+  ctx.clearRect(0, 0, w, h);
+  ctx.fillStyle = p.label;
+  ctx.fillRect(0, 0, w, h);
+  ctx.fillStyle = p.labelInk;
+  ctx.fillRect(0, 0, w, 5);
+  ctx.textBaseline = "alphabetic";
+
+  // status block on the right
+  const status = d.next
+    ? `TEACHING ${d.quarter.toUpperCase()}`
+    : d.last
+      ? `LAST TAUGHT ${d.last.toUpperCase()}`
+      : "NO GRADE HISTORY";
+  ctx.font = `600 30px ${font}`;
+  const sw = ctx.measureText(status).width;
+  const sx = w - 34 - sw;
+  ctx.fillStyle = d.next ? p.next : p.labelMuted;
+  ctx.fillRect(sx - 34, h / 2 - 4, 20, 20);
+  ctx.fillStyle = d.next ? p.labelInk : p.labelMuted;
+  ctx.fillText(status, sx, h / 2 + 16);
+
+  // name, shrunk to fit the space left of the status
+  const room = sx - 70 - 34;
+  const last = d.nameLast.toUpperCase();
+  const rest = d.nameRest.toUpperCase();
+  let size = 128;
+  const measure = () => {
+    ctx.font = `800 ${size}px ${font}`;
+    const a = ctx.measureText(last).width;
+    ctx.font = `300 ${Math.round(size * 0.46)}px ${font}`;
+    return a + (rest ? 22 + ctx.measureText(rest).width : 0);
+  };
+  while (size > 40 && measure() > room) size -= 4;
+  ctx.fillStyle = p.labelInk;
+  ctx.font = `800 ${size}px ${font}`;
+  const base = h / 2 + size * 0.36;
+  ctx.fillText(last, 34, base);
+  if (rest) {
+    const lx = 34 + ctx.measureText(last).width + 22;
+    ctx.font = `300 ${Math.round(size * 0.46)}px ${font}`;
+    ctx.fillText(rest, lx, base);
+  }
+}
+
+/** Photo frame: a warm monochrome print (the sources are low resolution), or initials when there is no verified photo. */
+function drawPhoto(canvas: HTMLCanvasElement, d: CassetteData, p: Palette, img?: HTMLImageElement) {
+  const ctx = canvas.getContext("2d")!;
+  const w = canvas.width;
+  const h = canvas.height;
+  const font = fontFamily();
+  ctx.fillStyle = p.label;
+  ctx.fillRect(0, 0, w, h);
+  const pad = 14;
+  const iw = w - pad * 2;
+  const ih = h - pad * 2 - 34;
+  if (img) {
+    const scale = Math.max(iw / img.width, ih / img.height);
+    const sw = iw / scale;
+    const sh = ih / scale;
+    ctx.save();
+    ctx.filter = "grayscale(1) sepia(0.35) contrast(1.06) brightness(1.03)";
+    ctx.drawImage(img, (img.width - sw) / 2, Math.max(0, (img.height - sh) * 0.3), sw, sh, pad, pad, iw, ih);
+    ctx.restore();
+  } else {
+    ctx.fillStyle = p.plate;
+    ctx.fillRect(pad, pad, iw, ih);
+    ctx.fillStyle = p.labelMuted;
+    ctx.font = `300 ${Math.round(iw * 0.42)}px ${font}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    const initials = (d.nameRest.replace(/[^A-Za-z ]/g, "").split(" ")[0]?.[0] ?? "") + (d.nameLast[0] ?? "");
+    ctx.fillText(initials.toUpperCase(), w / 2, pad + ih / 2);
+    ctx.textAlign = "left";
+  }
+  ctx.strokeStyle = p.labelInk;
+  ctx.lineWidth = 3;
+  ctx.strokeRect(pad, pad, iw, ih);
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = p.labelMuted;
+  ctx.font = `600 17px ${font}`;
+  ctx.fillText(img ? "ID / DEPT PAGE" : "ID / NO PHOTO", pad, h - 14);
 }
 
 export class Cassette {
@@ -238,6 +357,13 @@ export class Cassette {
   private scan: THREE.Mesh;
   private labelTex: THREE.CanvasTexture;
   private canvas: HTMLCanvasElement;
+  private nameCanvas: HTMLCanvasElement;
+  private nameTex: THREE.CanvasTexture;
+  private photoCanvas: HTMLCanvasElement;
+  private photoTex: THREE.CanvasTexture;
+  private photoImg?: HTMLImageElement;
+  private blockMat: THREE.MeshStandardMaterial;
+  private palette: Palette;
   private owned: THREE.Material[] = [];
   data: CassetteData;
   /** shown values, sprung toward data so arcs sweep */
@@ -249,6 +375,7 @@ export class Cassette {
     shared ??= buildShared();
     const g = shared;
     this.data = data;
+    this.palette = p;
     this.glass = glassMaterial(p);
     this.shell = new THREE.Mesh(g.shell, this.glass);
     this.shell.castShadow = shadows;
@@ -291,8 +418,9 @@ export class Cassette {
       s.position.set(x, y, D / 2 - 0.01);
       return s;
     });
-    const block = new THREE.Mesh(g.block, new THREE.MeshStandardMaterial({ color: "#c99a45", roughness: 0.5 }));
-    block.position.set(-W / 2 + 0.55, H - 0.02, 0);
+    this.blockMat = new THREE.MeshStandardMaterial({ color: data.next ? p.next : p.past, roughness: 0.45 });
+    const block = new THREE.Mesh(g.block, this.blockMat);
+    block.position.set(-W / 2 + 0.55, H - 0.01, 0);
 
     this.canvas = document.createElement("canvas");
     this.canvas.width = 512;
@@ -303,7 +431,35 @@ export class Cassette {
     this.labelTex.anisotropy = 4;
     const labelMat = new THREE.MeshBasicMaterial({ map: this.labelTex, toneMapped: false });
     const label = new THREE.Mesh(g.label, labelMat);
-    label.position.set(-W / 2 + 0.76, H - 0.6, -0.04);
+    label.position.set(-1.3, 3.27, -0.04);
+
+    const tex = (c: HTMLCanvasElement) => {
+      const t = new THREE.CanvasTexture(c);
+      t.colorSpace = THREE.SRGBColorSpace;
+      t.anisotropy = 4;
+      return t;
+    };
+    this.nameCanvas = document.createElement("canvas");
+    this.nameCanvas.width = 1376;
+    this.nameCanvas.height = 200;
+    drawName(this.nameCanvas, data, p);
+    this.nameTex = tex(this.nameCanvas);
+    const nameMat = new THREE.MeshBasicMaterial({ map: this.nameTex, toneMapped: false });
+    const name = new THREE.Mesh(g.name, nameMat);
+    // printed on the outside of the glass, so the name stays sharp however frosted the file is
+    name.position.set(NAME.x, NAME.y, D / 2 + 0.004);
+
+    this.photoCanvas = document.createElement("canvas");
+    this.photoCanvas.width = 248;
+    this.photoCanvas.height = 304;
+    drawPhoto(this.photoCanvas, data, p);
+    this.photoTex = tex(this.photoCanvas);
+    const photoMat = new THREE.MeshBasicMaterial({ map: this.photoTex, toneMapped: false });
+    const photo = new THREE.Mesh(g.photo, photoMat);
+    photo.position.set(PHOTO.x, PHOTO.y, -0.04);
+    this.loadPhoto();
+    // canvas text needs the web font; redraw once it is ready
+    document.fonts?.ready.then(() => this.redraw());
 
     const lineMat = new THREE.LineBasicMaterial({ color: p.ceramic, transparent: true, opacity: 0.8 });
     const lines = new THREE.LineSegments(g.lines, lineMat);
@@ -328,6 +484,8 @@ export class Cassette {
       ...screws,
       block,
       label,
+      name,
+      photo,
       lines,
       this.scan,
     );
@@ -340,8 +498,10 @@ export class Cassette {
       this.tick.material as THREE.Material,
       this.smallArc,
       metal,
-      block.material as THREE.Material,
+      this.blockMat,
       labelMat,
+      nameMat,
+      photoMat,
       lineMat,
       this.scan.material as THREE.Material,
     ];
@@ -351,10 +511,39 @@ export class Cassette {
   }
 
   update(data: CassetteData, p: Palette) {
+    const photoChanged = data.photo !== this.data.photo;
     this.data = data;
+    this.palette = p;
     this.frost = frostFor(data);
-    drawLabel(this.canvas, data, p);
+    this.blockMat.color.set(data.next ? p.next : p.past);
+    if (photoChanged) {
+      this.photoImg = undefined;
+      this.loadPhoto();
+    }
+    this.redraw();
+  }
+
+  private redraw() {
+    drawLabel(this.canvas, this.data, this.palette);
+    drawName(this.nameCanvas, this.data, this.palette);
+    drawPhoto(this.photoCanvas, this.data, this.palette, this.photoImg);
     this.labelTex.needsUpdate = true;
+    this.nameTex.needsUpdate = true;
+    this.photoTex.needsUpdate = true;
+  }
+
+  private loadPhoto() {
+    const url = this.data.photo;
+    if (!url) return;
+    const img = new Image();
+    img.decoding = "async";
+    img.onload = () => {
+      if (this.data.photo !== url) return;
+      this.photoImg = img;
+      drawPhoto(this.photoCanvas, this.data, this.palette, img);
+      this.photoTex.needsUpdate = true;
+    };
+    img.src = url;
   }
 
   /** Arcs ease toward the data; call every frame. */
@@ -379,7 +568,7 @@ export class Cassette {
     this.smallArc.userData.arc.uFrom.value = 0;
     this.smallArc.userData.arc.uTo.value = s.p;
     const a = s.typical * Math.PI * 2;
-    const r = BIG.r + 0.25;
+    const r = BIG.r + 0.23;
     this.tick.position.set(BIG.x + Math.sin(a) * r, BIG.y + Math.cos(a) * r, 0.01);
     this.tick.rotation.z = -a;
   }
@@ -402,6 +591,8 @@ export class Cassette {
   dispose() {
     this.owned.forEach((m) => m.dispose());
     this.labelTex.dispose();
+    this.nameTex.dispose();
+    this.photoTex.dispose();
   }
 }
 

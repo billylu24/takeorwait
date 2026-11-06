@@ -1,0 +1,10 @@
+{
+  "_rule": "Hand-checked. A Registrar name is linked to a person only when that person's own page on the official UCSB department site is the only entry in the department directory with that last name, the first initial matches, and the course belongs to that department. Everyone else gets an initials placeholder.",
+  "_checked": "2026-11-06",
+  "CMPSC:AGRAWAL D": { "display": "Divyakant Agrawal", "page": "https://cs.ucsb.edu/people/faculty/divyakant-agrawal" },
+  "CMPSC:MAJEDI M": { "display": "Maryam Majedi", "page": "https://cs.ucsb.edu/people/faculty/maryam-majedi" },
+  "CMPSC:MIRZA D": { "display": "Diba Mirza", "page": "https://cs.ucsb.edu/people/faculty/diba-mirza" },
+  "PHYS:FREUND E G": { "display": "Ernest Freund", "page": "https://www.physics.ucsb.edu/people/ernest-freund" },
+  "PHYS:KOUTROULAKIS": { "display": "Georgios Koutroulakis", "page": "https://www.physics.ucsb.edu/people/georgios-koutroulakis" },
+  "PHYS:POPESCU P F": { "display": "Paula Popescu", "page": "https://www.physics.ucsb.edu/people/paula-popescu" }
+}
