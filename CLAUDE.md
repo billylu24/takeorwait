@@ -6,7 +6,7 @@ A UCSB course decision tool (working title TakeOrWait) built on Daily Nexus / Re
 
 ## Private context
 
-`notes/` is gitignored and holds personal goals, application strategy, and the competitor/people analysis. Read `notes/goals.md` first in a new session. **Never move content from `notes/` into tracked files.** In particular, don't write anything disparaging about UCSBPlat or naming its maintainers in the public repo. The project is positioned as complementary to Plat.
+`notes/` is gitignored and holds application strategy and the competitor/people analysis. **Never move content from `notes/` into tracked files.** In particular, don't write anything disparaging about UCSBPlat or naming its maintainers in the public repo. The project is positioned as complementary to Plat.
 
 ## Working rules
 
