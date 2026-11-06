@@ -339,12 +339,13 @@ export default function CourseApp() {
     window.history.replaceState(null, "", `${window.location.pathname}?${q}`);
   }, [course, slug, mode, sel, entries, view]);
 
-  // up = toward the back of the drawer (up on screen), down = toward the front
+  // left / right = along the current course's files (on screen a course's files run left to right;
+  // the higher index sits further left), so left = +1, right = -1
   const step = useCallback(
     (d: number) => setSel((s) => Math.max(0, Math.min(entries.length - 1, s + d))),
     [entries.length],
   );
-  // left / right = the neighbouring course column
+  // up / down = the neighbouring course (the next course number's lane sits above on screen)
   const moveColumn = useCallback(
     (d: number) => {
       const target = colPos >= 0 ? deptList[colPos + d] : undefined;
@@ -364,18 +365,18 @@ export default function CourseApp() {
       if (e.key === "/") {
         e.preventDefault();
         setSearch(true);
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        step(1);
-      } else if (e.key === "ArrowDown") {
-        e.preventDefault();
-        step(-1);
       } else if (e.key === "ArrowLeft") {
         e.preventDefault();
-        moveColumn(-1);
+        step(1);
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
+        step(-1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
         moveColumn(1);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        moveColumn(-1);
       } else if (e.key === "Enter" && mode === "overview" && !t.closest("a, button")) setMode("detail");
       else if (e.key === "Escape" && mode === "detail") setMode("overview");
     };
@@ -395,12 +396,13 @@ export default function CourseApp() {
       accX += e.deltaX;
       const now = performance.now();
       if (now - lastStep < 160) return;
+      // same directions as the arrow keys: vertical wheel = course, horizontal swipe = instructor
       if (Math.abs(accX) > 60) {
-        moveColumn(Math.sign(accX));
+        step(-Math.sign(accX));
         acc = accX = 0;
         lastStep = now;
       } else if (Math.abs(acc) > 50) {
-        step(-Math.sign(acc)); // wheel down moves down the drawer
+        moveColumn(-Math.sign(acc));
         acc = accX = 0;
         lastStep = now;
       }
@@ -742,16 +744,16 @@ export default function CourseApp() {
                 <span className="c-of">/ {pad2(entries.length)}</span>
               </div>
               <div className="c-ticks">
-                <button aria-label="Up the column" onClick={() => step(1)}>
-                  ↑
+                <button aria-label="Instructor to the left" onClick={() => step(1)}>
+                  ←
                 </button>
-                <span className="ticks" aria-hidden>
+                <span className="ticks rev" aria-hidden>
                   {entries.slice(0, 40).map((e, i) => (
                     <i key={e.key} className={`${i === sel ? "on" : ""}${e.next ? " next" : ""}`} />
                   ))}
                 </span>
-                <button aria-label="Down the column" onClick={() => step(-1)}>
-                  ↓
+                <button aria-label="Instructor to the right" onClick={() => step(-1)}>
+                  →
                 </button>
               </div>
             </>
@@ -774,7 +776,7 @@ export default function CourseApp() {
         <div className="colnav">
           <button className="caps" disabled={!deptList[colPos - 1]} onClick={() => moveColumn(-1)}>
             <span className="glyph" aria-hidden>
-              ←
+              ↓
             </span>
             {codeOf.get(deptList[colPos - 1]) ?? ""}
           </button>
@@ -789,11 +791,11 @@ export default function CourseApp() {
           <button className="caps" disabled={!deptList[colPos + 1]} onClick={() => moveColumn(1)}>
             {codeOf.get(deptList[colPos + 1]) ?? ""}
             <span className="glyph" aria-hidden>
-              →
+              ↑
             </span>
           </button>
           <div className="hints caps" aria-hidden>
-            <span className="glyph">↑ ↓</span> Instructor <i>/</i> <span className="glyph">← →</span> Course <i>/</i>{" "}
+            <span className="glyph">← →</span> Instructor <i>/</i> <span className="glyph">↑ ↓</span> Course <i>/</i>{" "}
             <span className="glyph">↵</span> Open <i>/</i> <span className="glyph">/</span> Search
           </div>
         </div>

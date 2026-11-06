@@ -227,6 +227,7 @@ kbd {
 .ticks i { width: 1px; height: 11px; background: var(--muted); transition: height 0.3s, background 0.3s; }
 .ticks i.on { height: 24px; width: 2px; background: var(--text); }
 .ticks i.next { background: var(--next); }
+.ticks.rev { flex-direction: row-reverse; } /* index grows to the left, like the drawer */
 .c-hint { color: var(--muted); margin-top: 20px; display: flex; gap: 14px; }
 .mode-detail .counter { bottom: 60px; }
 .c-hint span { font-size: 14px; letter-spacing: 0; }
