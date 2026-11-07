@@ -21,7 +21,7 @@ const LIFT_DETAIL = 4.05;
 const HEIGHT_PER_A = 2.2; // a 100% A-rate stands 2.2 units out of the drawer
 const YAW = THREE.MathUtils.degToRad(55);
 const DIST = 80;
-const BUILD_MS = 4; // per frame, for building file interiors (canvas text, rings), so a new column never stalls a frame
+const BUILD_MS = 4; // per frame, for building the neighbouring columns' file interiors ahead of a switch
 const FILLER_REACH = 5; // filler bounding sphere plus the length of its shadow, for culling against the view
 
 type Mode = "overview" | "detail";
@@ -93,9 +93,6 @@ export class ArchiveScene {
   private frustum = new THREE.Frustum();
   private viewProj = new THREE.Matrix4();
   private sphere = new THREE.Sphere(new THREE.Vector3(), FILLER_REACH);
-  private lastRaf = 0;
-  private refresh = 1 / 60; // display refresh interval, smoothed
-  private skipped = 0;
   private samples: number[] = [];
   private quality = 0; // steps taken down: 1 no depth of field, 2 pixel ratio 1, 3 no shadows
 
@@ -285,12 +282,6 @@ export class ArchiveScene {
   }
 
   private tick(now: number) {
-    // render every n-th display refresh: 60 fps or a little over (120/180/240 Hz give 60, 144 Hz gives 72)
-    const raw = this.lastRaf ? now - this.lastRaf : 0;
-    this.lastRaf = now;
-    if (raw > 0 && raw < 0.05) this.refresh += (raw - this.refresh) * 0.05;
-    if (++this.skipped < Math.max(1, Math.floor(1 / 60 / this.refresh + 0.15))) return;
-    this.skipped = 0;
     const dt = Math.min(0.05, this.last ? now - this.last : 0.016);
     this.last = now;
     this.update(dt);
@@ -340,7 +331,7 @@ export class ArchiveScene {
     const detail = THREE.MathUtils.clamp(this.detail.value, 0, 1);
 
     // ---- columns slide to their lanes; files in every column
-    const unbuilt: Slot[] = [];
+    const ahead: Slot[] = [];
     for (let ci = this.columns.length - 1; ci >= 0; ci--) {
       const col = this.columns[ci];
       damp(col.pos, col.target, this.reduced ? 40 : 4.2, dt);
@@ -372,10 +363,8 @@ export class ArchiveScene {
         // only files near the visible rows are drawn
         const near = Math.abs(s.index - this.rail.value) < 34 && Math.abs(lane) < SIDE_LANES + 0.5;
         c.group.visible = near && (s.presence.value > 0.002 || !s.leaving);
-        const full = isActive && Math.abs(lane) <= 0.5;
-        if (full && !c.built) {
-          if (c.group.visible) unbuilt.push(s);
-        } else c.setLite(!full);
+        c.setLite(!isActive || Math.abs(lane) > 0.5); // builds the interior now if it was not built ahead
+        if (!c.built && !col.leaving && Math.abs(col.target) === 1 && c.group.visible) ahead.push(s);
         c.step(dt, this.reduced ? 60 : isSel ? 3.2 : 6);
         if (s.leaving && s.presence.value < 0.003 && started) {
           this.scene.remove(c.group);
@@ -385,11 +374,13 @@ export class ArchiveScene {
       }
       if (col.leaving && col.slots.length === 0) this.columns.splice(ci, 1);
     }
-    // interiors of the centre column, nearest the selection first, a few milliseconds' worth per frame
-    unbuilt.sort((a, b) => Math.abs(a.index - this.rail.value) - Math.abs(b.index - this.rail.value));
+    // build the next and previous columns' interiors in the background (hidden until they reach the centre),
+    // nearest the selection first, so a switch only has to show them
+    ahead.sort((a, b) => Math.abs(a.index - this.rail.value) - Math.abs(b.index - this.rail.value));
     const start = performance.now();
-    for (const s of unbuilt) {
-      s.cassette.setLite(false);
+    for (const s of ahead) {
+      s.cassette.build();
+      for (const t of s.cassette.textures) this.renderer.initTexture(t); // upload now, not on first show
       if (performance.now() - start > BUILD_MS) break;
     }
 

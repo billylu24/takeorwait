@@ -415,6 +415,10 @@ export class Cassette {
     return this.inner !== null;
   }
 
+  get textures() {
+    return this.inner?.textures ?? [];
+  }
+
   /** Build the interior: plate, rings, plates with canvas text, photo. */
   build() {
     if (this.inner) return;
