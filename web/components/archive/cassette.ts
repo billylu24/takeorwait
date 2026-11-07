@@ -93,13 +93,17 @@ let shared: ReturnType<typeof buildShared> | null = null;
 function buildShared() {
   const shell = new RoundedBoxGeometry(W, H, D, 3, 0.07);
   shell.translate(0, H / 2, 0);
+  // blank files are only ever seen from afar: 300 triangles instead of 588
+  const fillerShell = new RoundedBoxGeometry(W, H, D, 2, 0.07);
+  fillerShell.translate(0, H / 2, 0);
   const plate = new RoundedBoxGeometry(W - 0.34, H - 0.34, 0.05, 2, 0.03);
   plate.translate(0, H / 2, -D / 2 + 0.07);
-  const bigTrack = new THREE.TorusGeometry(BIG.r, BIG.tube, 20, 160);
-  const bigArc = new THREE.TorusGeometry(BIG.r, BIG.tube * 1.18, 20, 200);
-  const band = new THREE.RingGeometry(BIG.r + 0.18, BIG.r + 0.28, 200, 1);
-  const smallTrack = new THREE.TorusGeometry(SMALL.r, SMALL.tube, 16, 96);
-  const smallArc = new THREE.TorusGeometry(SMALL.r, SMALL.tube * 1.2, 16, 120);
+  // arcs end where the shader discards, so the segment counts only shape the silhouette (< 0.1 px off at detail size)
+  const bigTrack = new THREE.TorusGeometry(BIG.r, BIG.tube, 12, 96);
+  const bigArc = new THREE.TorusGeometry(BIG.r, BIG.tube * 1.18, 12, 128);
+  const band = new THREE.RingGeometry(BIG.r + 0.18, BIG.r + 0.28, 128, 1);
+  const smallTrack = new THREE.TorusGeometry(SMALL.r, SMALL.tube, 10, 64);
+  const smallArc = new THREE.TorusGeometry(SMALL.r, SMALL.tube * 1.2, 10, 80);
   const tick = new THREE.BoxGeometry(0.035, 0.22, 0.03);
   const screw = new THREE.CylinderGeometry(0.075, 0.075, 0.05, 20);
   screw.rotateX(Math.PI / 2);
@@ -123,6 +127,7 @@ function buildShared() {
   const lines = new THREE.BufferGeometry().setFromPoints(pts);
   return {
     shell,
+    fillerShell,
     plate,
     bigTrack,
     bigArc,
@@ -346,31 +351,44 @@ function drawPhoto(canvas: HTMLCanvasElement, d: CassetteData, p: Palette, img?:
   ctx.fillText(img ? "ID / DEPT PAGE" : "ID / NO PHOTO", pad, h - 14);
 }
 
+// Materials that are the same on every file, one set per palette (they live as long as the page).
+const common = new Map<Palette, ReturnType<typeof buildCommon>>();
+function buildCommon(p: Palette) {
+  return {
+    plate: new THREE.MeshStandardMaterial({ color: p.plate, roughness: 0.7 }),
+    ceramic: new THREE.MeshStandardMaterial({ color: p.ceramic, roughness: 0.55 }),
+    ink: new THREE.MeshStandardMaterial({ color: p.ink, roughness: 0.5 }),
+    metal: new THREE.MeshStandardMaterial({ color: "#b9b4ac", metalness: 0.85, roughness: 0.3 }),
+    lines: new THREE.LineBasicMaterial({ color: p.ceramic, transparent: true, opacity: 0.8 }),
+  };
+}
+
+type Interior = {
+  bigArc: ReturnType<typeof arcMaterial>;
+  band: ReturnType<typeof arcMaterial>;
+  smallArc: ReturnType<typeof arcMaterial>;
+  tick: THREE.Mesh;
+  scan: THREE.Mesh;
+  objects: THREE.Object3D[];
+  canvases: { label: HTMLCanvasElement; name: HTMLCanvasElement; photo: HTMLCanvasElement };
+  textures: THREE.CanvasTexture[];
+  materials: THREE.Material[];
+};
+
 export class Cassette {
   readonly group = new THREE.Group();
   readonly shell: THREE.Mesh;
   private glass: ReturnType<typeof glassMaterial>;
-  private bigArc: ReturnType<typeof arcMaterial>;
-  private band: ReturnType<typeof arcMaterial>;
-  private smallArc: ReturnType<typeof arcMaterial>;
-  private tick: THREE.Mesh;
-  private scan: THREE.Mesh;
-  private labelTex: THREE.CanvasTexture;
-  private canvas: HTMLCanvasElement;
-  private nameCanvas: HTMLCanvasElement;
-  private nameTex: THREE.CanvasTexture;
-  private photoCanvas: HTMLCanvasElement;
-  private photoTex: THREE.CanvasTexture;
-  private photoImg?: HTMLImageElement;
   private blockMat: THREE.MeshStandardMaterial;
   private palette: Palette;
-  private interior: THREE.Object3D[] = [];
-  private lite = false;
-  private owned: THREE.Material[] = [];
+  private shadows: boolean;
+  /** Everything inside the glass. Built on first use: side columns only ever show the shell and block. */
+  private inner: Interior | null = null;
+  private photoImg?: HTMLImageElement;
+  private lite = true;
   data: CassetteData;
   /** shown values, sprung toward data so arcs sweep */
   private shown = { est: 0, lo: 0, hi: 0, p: 0, typical: 0 };
-  clarity = 0; // animated reveal 0..1
   frost: number; // roughness when fully revealed
 
   constructor(data: CassetteData, p: Palette, shadows: boolean) {
@@ -378,174 +396,124 @@ export class Cassette {
     const g = shared;
     this.data = data;
     this.palette = p;
+    this.shadows = shadows;
     this.glass = glassMaterial(p);
+    this.glass.transmission = 0;
     this.shell = new THREE.Mesh(g.shell, this.glass);
     this.shell.castShadow = shadows;
     this.shell.receiveShadow = shadows;
     this.shell.userData.cassette = this;
+    this.blockMat = new THREE.MeshStandardMaterial({ color: data.next ? p.next : p.past, roughness: 0.45 });
+    const block = new THREE.Mesh(g.block, this.blockMat);
+    block.position.set(-W / 2 + 0.55, H - 0.01, 0);
+    this.group.add(this.shell, block);
+    this.frost = frostFor(data);
+    this.shown = { est: 0, lo: data.typical, hi: data.typical, p: 0, typical: data.typical };
+  }
 
-    const plateMat = new THREE.MeshStandardMaterial({ color: p.plate, roughness: 0.7 });
-    const plate = new THREE.Mesh(g.plate, plateMat);
-    plate.receiveShadow = shadows;
+  get built() {
+    return this.inner !== null;
+  }
 
-    const ceramic = new THREE.MeshStandardMaterial({ color: p.ceramic, roughness: 0.55 });
-    const bigTrack = new THREE.Mesh(g.bigTrack, ceramic);
+  /** Build the interior: plate, rings, plates with canvas text, photo. */
+  build() {
+    if (this.inner) return;
+    const g = shared!;
+    const p = this.palette;
+    const data = this.data;
+    const m = (common.get(p) ?? common.set(p, buildCommon(p)).get(p))!;
+
+    const plate = new THREE.Mesh(g.plate, m.plate);
+    plate.receiveShadow = this.shadows;
+    const bigTrack = new THREE.Mesh(g.bigTrack, m.ceramic);
     bigTrack.position.set(BIG.x, BIG.y, -0.02);
-    this.bigArc = arcMaterial({ color: p.copper, metalness: 0.5, roughness: 0.3, clearcoat: 0.4 });
-    const bigArc = new THREE.Mesh(g.bigArc, this.bigArc);
+    const bigArcMat = arcMaterial({ color: p.copper, metalness: 0.5, roughness: 0.3, clearcoat: 0.4 });
+    const bigArc = new THREE.Mesh(g.bigArc, bigArcMat);
     bigArc.position.copy(bigTrack.position);
     // opaque on purpose: transparent meshes are not visible through transmissive glass
-    this.band = arcMaterial({
+    const bandMat = arcMaterial({
       color: new THREE.Color(p.plate).lerp(new THREE.Color(p.copper), 0.5),
       roughness: 0.55,
       side: THREE.DoubleSide,
     });
-    const band = new THREE.Mesh(g.band, this.band);
+    const band = new THREE.Mesh(g.band, bandMat);
     band.position.set(BIG.x, BIG.y, -0.04);
-    this.tick = new THREE.Mesh(g.tick, new THREE.MeshStandardMaterial({ color: p.ink, roughness: 0.5 }));
-    this.tick.position.z = 0.01;
+    const tick = new THREE.Mesh(g.tick, m.ink);
+    tick.position.z = 0.01;
 
-    const smallTrack = new THREE.Mesh(g.smallTrack, ceramic);
+    const smallTrack = new THREE.Mesh(g.smallTrack, m.ceramic);
     smallTrack.position.set(SMALL.x, SMALL.y, -0.02);
-    this.smallArc = arcMaterial({ color: p.copper, metalness: 0.5, roughness: 0.3, clearcoat: 0.4 });
-    const smallArc = new THREE.Mesh(g.smallArc, this.smallArc);
+    const smallArcMat = arcMaterial({ color: p.copper, metalness: 0.5, roughness: 0.3, clearcoat: 0.4 });
+    const smallArc = new THREE.Mesh(g.smallArc, smallArcMat);
     smallArc.position.copy(smallTrack.position);
 
-    const metal = new THREE.MeshStandardMaterial({ color: "#b9b4ac", metalness: 0.85, roughness: 0.3 });
     const screws = [
       [W / 2 - 0.22, H - 0.22],
       [-W / 2 + 0.22, 0.22],
     ].map(([x, y]) => {
-      const s = new THREE.Mesh(g.screw, metal);
+      const s = new THREE.Mesh(g.screw, m.metal);
       s.position.set(x, y, D / 2 - 0.01);
       return s;
     });
-    this.blockMat = new THREE.MeshStandardMaterial({ color: data.next ? p.next : p.past, roughness: 0.45 });
-    const block = new THREE.Mesh(g.block, this.blockMat);
-    block.position.set(-W / 2 + 0.55, H - 0.01, 0);
 
-    this.canvas = document.createElement("canvas");
-    this.canvas.width = 512;
-    this.canvas.height = 240;
-    drawLabel(this.canvas, data, p);
-    this.labelTex = new THREE.CanvasTexture(this.canvas);
-    this.labelTex.colorSpace = THREE.SRGBColorSpace;
-    this.labelTex.anisotropy = 4;
-    const labelMat = new THREE.MeshBasicMaterial({ map: this.labelTex, toneMapped: false });
-    const label = new THREE.Mesh(g.label, labelMat);
-    label.position.set(-1.3, 3.27, -0.04);
-
-    const tex = (c: HTMLCanvasElement) => {
+    const canvas = (w: number, h: number) => Object.assign(document.createElement("canvas"), { width: w, height: h });
+    const canvases = { label: canvas(512, 240), name: canvas(1376, 200), photo: canvas(248, 304) };
+    drawLabel(canvases.label, data, p);
+    drawName(canvases.name, data, p);
+    drawPhoto(canvases.photo, data, p);
+    const textures = [canvases.label, canvases.name, canvases.photo].map((c) => {
       const t = new THREE.CanvasTexture(c);
       t.colorSpace = THREE.SRGBColorSpace;
       t.anisotropy = 4;
       return t;
-    };
-    this.nameCanvas = document.createElement("canvas");
-    this.nameCanvas.width = 1376;
-    this.nameCanvas.height = 200;
-    drawName(this.nameCanvas, data, p);
-    this.nameTex = tex(this.nameCanvas);
-    const nameMat = new THREE.MeshBasicMaterial({ map: this.nameTex, toneMapped: false });
+    });
+    const [labelMat, nameMat, photoMat] = textures.map(
+      (map) => new THREE.MeshBasicMaterial({ map, toneMapped: false }),
+    );
+    const label = new THREE.Mesh(g.label, labelMat);
+    label.position.set(-1.3, 3.27, -0.04);
     const name = new THREE.Mesh(g.name, nameMat);
     // printed on the outside of the glass, so the name stays sharp however frosted the file is
     name.position.set(NAME.x, NAME.y, D / 2 + 0.004);
-
-    this.photoCanvas = document.createElement("canvas");
-    this.photoCanvas.width = 248;
-    this.photoCanvas.height = 304;
-    drawPhoto(this.photoCanvas, data, p);
-    this.photoTex = tex(this.photoCanvas);
-    const photoMat = new THREE.MeshBasicMaterial({ map: this.photoTex, toneMapped: false });
     const photo = new THREE.Mesh(g.photo, photoMat);
     photo.position.set(PHOTO.x, PHOTO.y, -0.04);
+
+    const lines = new THREE.LineSegments(g.lines, m.lines);
+
+    const scanMat = new THREE.MeshBasicMaterial({ color: p.ink, transparent: true, opacity: 0, depthWrite: false });
+    const scan = new THREE.Mesh(g.scan, scanMat);
+    scan.position.set(0, H / 2, D / 2 + 0.012);
+    scan.rotation.z = Math.atan2(H * 0.74, W * 0.9);
+    scan.renderOrder = 2;
+    scan.visible = false;
+
+    const objects = [plate, bigTrack, bigArc, band, tick, smallTrack, smallArc, ...screws, label, name, photo, lines];
+    for (const o of objects) o.visible = !this.lite;
+    this.group.add(...objects, scan);
+    this.inner = {
+      bigArc: bigArcMat,
+      band: bandMat,
+      smallArc: smallArcMat,
+      tick,
+      scan,
+      objects,
+      canvases,
+      textures,
+      materials: [bigArcMat, bandMat, smallArcMat, labelMat, nameMat, photoMat, scanMat],
+    };
+    this.applyShown();
     this.loadPhoto();
     // canvas text needs the web font; redraw once it is ready
-    document.fonts?.ready.then(() => this.redraw());
-
-    const lineMat = new THREE.LineBasicMaterial({ color: p.ceramic, transparent: true, opacity: 0.8 });
-    const lines = new THREE.LineSegments(g.lines, lineMat);
-
-    this.scan = new THREE.Mesh(
-      g.scan,
-      new THREE.MeshBasicMaterial({ color: p.ink, transparent: true, opacity: 0, depthWrite: false }),
-    );
-    this.scan.position.set(0, H / 2, D / 2 + 0.012);
-    this.scan.rotation.z = Math.atan2(H * 0.74, W * 0.9);
-    this.scan.renderOrder = 2;
-
-    this.interior = [
-      plate,
-      bigTrack,
-      bigArc,
-      band,
-      this.tick,
-      smallTrack,
-      smallArc,
-      ...screws,
-      label,
-      name,
-      photo,
-      lines,
-    ];
-    this.group.add(
-      this.shell,
-      plate,
-      bigTrack,
-      bigArc,
-      band,
-      this.tick,
-      smallTrack,
-      smallArc,
-      ...screws,
-      block,
-      label,
-      name,
-      photo,
-      lines,
-      this.scan,
-    );
-    this.owned = [
-      this.glass,
-      plateMat,
-      ceramic,
-      this.bigArc,
-      this.band,
-      this.tick.material as THREE.Material,
-      this.smallArc,
-      metal,
-      this.blockMat,
-      labelMat,
-      nameMat,
-      photoMat,
-      lineMat,
-      this.scan.material as THREE.Material,
-    ];
-    this.frost = frostFor(data);
-    this.shown = { est: 0, lo: data.typical, hi: data.typical, p: 0, typical: data.typical };
-    this.applyShown();
-  }
-
-  update(data: CassetteData, p: Palette) {
-    const photoChanged = data.photo !== this.data.photo;
-    this.data = data;
-    this.palette = p;
-    this.frost = frostFor(data);
-    this.blockMat.color.set(data.next ? p.next : p.past);
-    if (photoChanged) {
-      this.photoImg = undefined;
-      this.loadPhoto();
-    }
-    this.redraw();
+    if (document.fonts && document.fonts.status !== "loaded") document.fonts.ready.then(() => this.redraw());
   }
 
   private redraw() {
-    drawLabel(this.canvas, this.data, this.palette);
-    drawName(this.nameCanvas, this.data, this.palette);
-    drawPhoto(this.photoCanvas, this.data, this.palette, this.photoImg);
-    this.labelTex.needsUpdate = true;
-    this.nameTex.needsUpdate = true;
-    this.photoTex.needsUpdate = true;
+    const i = this.inner;
+    if (!i) return;
+    drawLabel(i.canvases.label, this.data, this.palette);
+    drawName(i.canvases.name, this.data, this.palette);
+    drawPhoto(i.canvases.photo, this.data, this.palette, this.photoImg);
+    for (const t of i.textures) t.needsUpdate = true;
   }
 
   private loadPhoto() {
@@ -554,10 +522,11 @@ export class Cassette {
     const img = new Image();
     img.decoding = "async";
     img.onload = () => {
-      if (this.data.photo !== url) return;
+      const i = this.inner;
+      if (this.data.photo !== url || !i) return;
       this.photoImg = img;
-      drawPhoto(this.photoCanvas, this.data, this.palette, img);
-      this.photoTex.needsUpdate = true;
+      drawPhoto(i.canvases.photo, this.data, this.palette, img);
+      i.textures[2].needsUpdate = true;
     };
     img.src = url;
   }
@@ -576,29 +545,33 @@ export class Cassette {
   }
 
   private applyShown() {
+    const i = this.inner;
+    if (!i) return;
     const s = this.shown;
-    this.bigArc.userData.arc.uFrom.value = 0;
-    this.bigArc.userData.arc.uTo.value = s.est;
-    this.band.userData.arc.uFrom.value = s.lo;
-    this.band.userData.arc.uTo.value = s.hi;
-    this.smallArc.userData.arc.uFrom.value = 0;
-    this.smallArc.userData.arc.uTo.value = s.p;
+    i.bigArc.userData.arc.uFrom.value = 0;
+    i.bigArc.userData.arc.uTo.value = s.est;
+    i.band.userData.arc.uFrom.value = s.lo;
+    i.band.userData.arc.uTo.value = s.hi;
+    i.smallArc.userData.arc.uFrom.value = 0;
+    i.smallArc.userData.arc.uTo.value = s.p;
     const a = s.typical * Math.PI * 2;
     const r = BIG.r + 0.23;
-    this.tick.position.set(BIG.x + Math.sin(a) * r, BIG.y + Math.cos(a) * r, 0.01);
-    this.tick.rotation.z = -a;
+    i.tick.position.set(BIG.x + Math.sin(a) * r, BIG.y + Math.cos(a) * r, 0.01);
+    i.tick.rotation.z = -a;
   }
 
-  /** reveal: 0 = frosted (in the drawer), 1 = decrypted (clear to this file's certainty). */
-  /** Side columns: only the frosted shell and the status block (two draw calls instead of sixteen). */
+  /** Lite: only the frosted shell and the status block (two draw calls instead of sixteen). Showing the interior
+   * builds it if needed. */
   setLite(lite: boolean) {
     if (lite === this.lite) return;
+    if (!lite) this.build();
     this.lite = lite;
-    for (const o of this.interior) o.visible = !lite;
+    for (const o of this.inner?.objects ?? []) o.visible = !lite;
     this.glass.transmission = lite ? 0 : 0.9;
     this.glass.needsUpdate = true;
   }
 
+  /** reveal: 0 = frosted (in the drawer), 1 = decrypted (clear to this file's certainty). */
   setReveal(reveal: number, frosted = 0.62) {
     this.glass.userData.glass.uReveal.value = reveal;
     this.glass.userData.glass.uFrost.value = frosted;
@@ -607,17 +580,18 @@ export class Cassette {
 
   /** Diagonal scan line across the face: length 0..1, opacity 0..1. */
   setScan(length: number, opacity: number) {
-    const m = this.scan.material as THREE.MeshBasicMaterial;
-    m.opacity = opacity;
-    this.scan.visible = opacity > 0.001 && length > 0.001;
-    this.scan.scale.set(Math.max(0.001, length) * Math.hypot(W * 0.9, H * 0.74), 1, 1);
+    const scan = this.inner?.scan;
+    if (!scan) return;
+    (scan.material as THREE.MeshBasicMaterial).opacity = opacity;
+    scan.visible = opacity > 0.001 && length > 0.001;
+    scan.scale.set(Math.max(0.001, length) * Math.hypot(W * 0.9, H * 0.74), 1, 1);
   }
 
   dispose() {
-    this.owned.forEach((m) => m.dispose());
-    this.labelTex.dispose();
-    this.nameTex.dispose();
-    this.photoTex.dispose();
+    this.glass.dispose();
+    this.blockMat.dispose();
+    this.inner?.materials.forEach((m) => m.dispose());
+    this.inner?.textures.forEach((t) => t.dispose());
   }
 }
 
@@ -653,7 +627,7 @@ export function fillerMesh(p: Palette, count: number, shadows: boolean) {
         "#include <color_fragment>\ndiffuseColor.rgb *= mix(vec3(0.42, 0.33, 0.24), vec3(1.0, 0.98, 0.94), smoothstep(0.08, 1.0, vPanelY));",
       );
   };
-  const mesh = new THREE.InstancedMesh(shared.shell, mat, count);
+  const mesh = new THREE.InstancedMesh(shared.fillerShell, mat, count);
   mesh.castShadow = shadows;
   mesh.receiveShadow = shadows;
   mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);

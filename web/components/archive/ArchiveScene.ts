@@ -21,6 +21,8 @@ const LIFT_DETAIL = 4.05;
 const HEIGHT_PER_A = 2.2; // a 100% A-rate stands 2.2 units out of the drawer
 const YAW = THREE.MathUtils.degToRad(55);
 const DIST = 80;
+const BUILD_MS = 4; // per frame, for building file interiors (canvas text, rings), so a new column never stalls a frame
+const FILLER_REACH = 5; // filler bounding sphere plus the length of its shadow, for culling against the view
 
 type Mode = "overview" | "detail";
 
@@ -88,6 +90,14 @@ export class ArchiveScene {
   private abort = new AbortController();
   private resizeObserver: ResizeObserver;
   private portrait = false;
+  private frustum = new THREE.Frustum();
+  private viewProj = new THREE.Matrix4();
+  private sphere = new THREE.Sphere(new THREE.Vector3(), FILLER_REACH);
+  private lastRaf = 0;
+  private refresh = 1 / 60; // display refresh interval, smoothed
+  private skipped = 0;
+  private samples: number[] = [];
+  private quality = 0; // steps taken down: 1 no depth of field, 2 pixel ratio 1, 3 no shadows
 
   constructor(
     private container: HTMLElement,
@@ -275,10 +285,41 @@ export class ArchiveScene {
   }
 
   private tick(now: number) {
+    // render every n-th display refresh: 60 fps or a little over (120/180/240 Hz give 60, 144 Hz gives 72)
+    const raw = this.lastRaf ? now - this.lastRaf : 0;
+    this.lastRaf = now;
+    if (raw > 0 && raw < 0.05) this.refresh += (raw - this.refresh) * 0.05;
+    if (++this.skipped < Math.max(1, Math.floor(1 / 60 / this.refresh + 0.15))) return;
+    this.skipped = 0;
     const dt = Math.min(0.05, this.last ? now - this.last : 0.016);
     this.last = now;
     this.update(dt);
     this.composer.render(dt);
+    this.adapt(dt);
+  }
+
+  /** A machine that cannot hold 45 fps loses, in turn, depth of field, the high pixel ratio and shadows. */
+  private adapt(dt: number) {
+    if (this.time < 3 || this.quality >= 3) return; // skip start-up (shader compilation)
+    this.samples.push(dt);
+    if (this.samples.length < 90) return;
+    const median = this.samples.sort((a, b) => a - b)[45];
+    this.samples = [];
+    if (median <= 1 / 45) return;
+    this.quality++;
+    if (this.quality === 1) this.bokeh.enabled = false;
+    if (this.quality === 2) {
+      this.renderer.setPixelRatio(1);
+      this.composer.setPixelRatio(1);
+      this.resize();
+    }
+    if (this.quality === 3) {
+      this.renderer.shadowMap.enabled = false;
+      this.scene.traverse((o) => {
+        const m = (o as THREE.Mesh).material;
+        if (m) for (const x of Array.isArray(m) ? m : [m]) x.needsUpdate = true;
+      });
+    }
   }
 
   /** Debug/testing: advance the simulation without rendering each step (software WebGL is too slow to watch). */
@@ -299,6 +340,7 @@ export class ArchiveScene {
     const detail = THREE.MathUtils.clamp(this.detail.value, 0, 1);
 
     // ---- columns slide to their lanes; files in every column
+    const unbuilt: Slot[] = [];
     for (let ci = this.columns.length - 1; ci >= 0; ci--) {
       const col = this.columns[ci];
       damp(col.pos, col.target, this.reduced ? 40 : 4.2, dt);
@@ -330,7 +372,10 @@ export class ArchiveScene {
         // only files near the visible rows are drawn
         const near = Math.abs(s.index - this.rail.value) < 34 && Math.abs(lane) < SIDE_LANES + 0.5;
         c.group.visible = near && (s.presence.value > 0.002 || !s.leaving);
-        c.setLite(!isActive || Math.abs(lane) > 0.5);
+        const full = isActive && Math.abs(lane) <= 0.5;
+        if (full && !c.built) {
+          if (c.group.visible) unbuilt.push(s);
+        } else c.setLite(!full);
         c.step(dt, this.reduced ? 60 : isSel ? 3.2 : 6);
         if (s.leaving && s.presence.value < 0.003 && started) {
           this.scene.remove(c.group);
@@ -339,6 +384,13 @@ export class ArchiveScene {
         }
       }
       if (col.leaving && col.slots.length === 0) this.columns.splice(ci, 1);
+    }
+    // interiors of the centre column, nearest the selection first, a few milliseconds' worth per frame
+    unbuilt.sort((a, b) => Math.abs(a.index - this.rail.value) - Math.abs(b.index - this.rail.value));
+    const start = performance.now();
+    for (const s of unbuilt) {
+      s.cassette.setLite(false);
+      if (performance.now() - start > BUILD_MS) break;
     }
 
     // ---- decryption of the extracted file
@@ -368,29 +420,6 @@ export class ArchiveScene {
           s.cassette.setScan(0, 0);
           s.cassette.setReveal(0);
         }
-
-    // ---- blank files: every lane, in the rows a column's files do not occupy
-    let n = 0;
-    const first = Math.floor(this.rail.value) - 30;
-    const last = Math.ceil(this.rail.value) + 40;
-    const lanes: { x: number; rows: number }[] = this.columns
-      .filter((c) => !c.leaving)
-      .map((c) => ({ x: c.pos.value, rows: c.slots.some((sl) => !sl.leaving) ? (c.files?.length ?? 0) : 0 }));
-    const taken = new Set(this.columns.filter((c) => !c.leaving).map((c) => c.target));
-    for (let l = -SIDE_LANES; l <= SIDE_LANES; l++) if (!taken.has(l)) lanes.push({ x: l, rows: 0 });
-    for (const { x, rows } of lanes) {
-      if (Math.abs(x) > SIDE_LANES + 0.5) continue;
-      for (let r = first; r <= last && n < this.fillerCount; r++) {
-        if (r >= 0 && r < rows) continue; // a file stands here
-        const z = (this.rail.value - r) * ROW;
-        this.dummy.position.set(x * LANE, this.field(r + PAD, x), z);
-        this.dummy.rotation.set((this.field(r + PAD + 0.5, x) - this.field(r + PAD - 0.5, x)) * 0.024, 0, 0);
-        this.dummy.updateMatrix();
-        this.fillers.setMatrixAt(n++, this.dummy.matrix);
-      }
-    }
-    this.fillers.count = n;
-    this.fillers.instanceMatrix.needsUpdate = true;
 
     // ---- camera: a long lens far away, re-aimed so the selected file sits beside the text panel
     const elev = THREE.MathUtils.degToRad(THREE.MathUtils.lerp(26, 13, detail));
@@ -430,6 +459,36 @@ export class ArchiveScene {
       0.0016,
       detail,
     );
+
+    // ---- blank files: every lane, in the rows a column's files do not occupy
+    this.camera.updateMatrixWorld();
+    this.viewProj.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.viewProj);
+    let n = 0;
+    const first = Math.floor(this.rail.value) - 30;
+    const last = Math.ceil(this.rail.value) + 40;
+    const lanes: { x: number; rows: number }[] = this.columns
+      .filter((c) => !c.leaving)
+      .map((c) => ({ x: c.pos.value, rows: c.slots.some((sl) => !sl.leaving) ? (c.files?.length ?? 0) : 0 }));
+    const taken = new Set(this.columns.filter((c) => !c.leaving).map((c) => c.target));
+    for (let l = -SIDE_LANES; l <= SIDE_LANES; l++) if (!taken.has(l)) lanes.push({ x: l, rows: 0 });
+    for (const { x, rows } of lanes) {
+      if (Math.abs(x) > SIDE_LANES + 0.5) continue;
+      for (let r = first; r <= last && n < this.fillerCount; r++) {
+        if (r >= 0 && r < rows) continue; // a file stands here
+        const z = (this.rail.value - r) * ROW;
+        const y = this.field(r + PAD, x);
+        // instanced meshes are not culled per instance: skip blanks outside the view (about 3 in 4)
+        this.sphere.center.set(x * LANE, y + H / 2, z);
+        if (!this.frustum.intersectsSphere(this.sphere)) continue;
+        this.dummy.position.set(x * LANE, y, z);
+        this.dummy.rotation.set((this.field(r + PAD + 0.5, x) - this.field(r + PAD - 0.5, x)) * 0.024, 0, 0);
+        this.dummy.updateMatrix();
+        this.fillers.setMatrixAt(n++, this.dummy.matrix);
+      }
+    }
+    this.fillers.count = n;
+    this.fillers.instanceMatrix.needsUpdate = true;
 
     if (this.frame % 3 === 0) this.updateHover();
   }
