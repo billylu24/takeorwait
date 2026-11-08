@@ -21,7 +21,8 @@ const LIFT_DETAIL = 4.05;
 const HEIGHT_PER_A = 2.2; // a 100% A-rate stands 2.2 units out of the drawer
 const YAW = THREE.MathUtils.degToRad(55);
 const DIST = 80;
-const NEAR = 1; // lanes each side of the centre shown in full; farther lanes show opaque shells
+const NEAR = 2; // lanes each side of the centre shown in full; farther lanes show opaque shells
+const RENDER_SCALE = 0.85; // render slightly below the screen's resolution
 const FILLER_REACH = 5; // filler bounding sphere plus the length of its shadow, for culling against the view
 
 type Mode = "overview" | "detail";
@@ -96,7 +97,7 @@ export class ArchiveScene {
   private viewProj = new THREE.Matrix4();
   private sphere = new THREE.Sphere(new THREE.Vector3(), FILLER_REACH);
   private samples: number[] = [];
-  private quality = 0; // steps taken down: 1 no depth of field, 2 pixel ratio 1, 3 no shadows
+  private quality = 0; // steps taken down: 1 no depth of field, 2 pixel ratio 0.7, 3 no shadows
 
   constructor(
     private container: HTMLElement,
@@ -107,7 +108,7 @@ export class ArchiveScene {
     this.palette = dark ? DARK : LIGHT;
     const shadows = true;
     this.renderer = new THREE.WebGLRenderer({ antialias: false, alpha: false, powerPreference: "high-performance" });
-    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5) * RENDER_SCALE);
     this.renderer.shadowMap.enabled = shadows;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -305,8 +306,8 @@ export class ArchiveScene {
     this.quality++;
     if (this.quality === 1) this.bokeh.enabled = false;
     if (this.quality === 2) {
-      this.renderer.setPixelRatio(1);
-      this.composer.setPixelRatio(1);
+      this.renderer.setPixelRatio(0.7);
+      this.composer.setPixelRatio(0.7);
       this.resize();
     }
     if (this.quality === 3) {
