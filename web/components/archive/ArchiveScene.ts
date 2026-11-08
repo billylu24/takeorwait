@@ -9,7 +9,7 @@ import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
 import { BokehPass } from "three/addons/postprocessing/BokehPass.js";
 import { OutputPass } from "three/addons/postprocessing/OutputPass.js";
 
-import { Cassette, DARK, H, LIGHT, fillerMesh, type CassetteData, type Palette } from "./cassette";
+import { Cassette, DARK, H, INTERIOR, LIGHT, fillerMesh, type CassetteData, type Palette } from "./cassette";
 import { damp, idleWave, selectionWave, smooth, spring, swapWave, type Spring } from "./motion";
 
 const ROW = 0.62; // spacing between files in a lane (z)
@@ -21,7 +21,7 @@ const LIFT_DETAIL = 4.05;
 const HEIGHT_PER_A = 2.2; // a 100% A-rate stands 2.2 units out of the drawer
 const YAW = THREE.MathUtils.degToRad(55);
 const DIST = 80;
-const BUILD_MS = 4; // per frame, for building the neighbouring columns' file interiors ahead of a switch
+const NEAR = 1; // lanes each side of the centre shown in full; farther lanes show opaque shells
 const FILLER_REACH = 5; // filler bounding sphere plus the length of its shadow, for culling against the view
 
 type Mode = "overview" | "detail";
@@ -35,6 +35,7 @@ type Slot = {
   lift: Spring;
   hover: Spring;
   yaw: Spring;
+  full: Spring; // 0 = lite shell, 1 = glass with the interior showing
 };
 
 /** A column as given by the app: a course key and its ranked files (null = blank lane). */
@@ -59,6 +60,7 @@ export class ArchiveScene {
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera = new THREE.PerspectiveCamera(8, 1, 20, 220);
+  private depthCamera = new THREE.PerspectiveCamera(); // the camera without file interiors, for depth of field
   private composer: EffectComposer;
   private bokeh: BokehPass;
   private key: THREE.DirectionalLight;
@@ -151,7 +153,8 @@ export class ArchiveScene {
     const target = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, samples: 4 });
     this.composer = new EffectComposer(this.renderer, target);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bokeh = new BokehPass(this.scene, this.camera, { focus: DIST, aperture: 0.0012, maxblur: 0.008 });
+    this.camera.layers.enable(INTERIOR);
+    this.bokeh = new BokehPass(this.scene, this.depthCamera, { focus: DIST, aperture: 0.0012, maxblur: 0.008 });
     this.composer.addPass(this.bokeh);
     this.composer.addPass(new OutputPass());
 
@@ -160,6 +163,7 @@ export class ArchiveScene {
     this.resize();
     this.bindInput();
     this.renderer.setAnimationLoop((t) => this.tick(t / 1000));
+    this.schedulePrepare();
   }
 
   // ---------------------------------------------------------------- data
@@ -224,6 +228,7 @@ export class ArchiveScene {
         lift: spring(0),
         hover: spring(0),
         yaw: spring(0),
+        full: spring(0),
       };
     });
     col.slots = [...col.slots.filter((s) => s.leaving), ...fresh];
@@ -331,7 +336,6 @@ export class ArchiveScene {
     const detail = THREE.MathUtils.clamp(this.detail.value, 0, 1);
 
     // ---- columns slide to their lanes; files in every column
-    const ahead: Slot[] = [];
     for (let ci = this.columns.length - 1; ci >= 0; ci--) {
       const col = this.columns[ci];
       damp(col.pos, col.target, this.reduced ? 40 : 4.2, dt);
@@ -363,8 +367,10 @@ export class ArchiveScene {
         // only files near the visible rows are drawn
         const near = Math.abs(s.index - this.rail.value) < 34 && Math.abs(lane) < SIDE_LANES + 0.5;
         c.group.visible = near && (s.presence.value > 0.002 || !s.leaving);
-        c.setLite(!isActive || Math.abs(lane) > 0.5); // builds the interior now if it was not built ahead
-        if (!c.built && !col.leaving && Math.abs(col.target) === 1 && c.group.visible) ahead.push(s);
+        // near lanes in full once their files are prepared (they fade in); far lanes as shells
+        const inFull = Math.abs(lane) < NEAR + 0.5 && !col.leaving;
+        damp(s.full, inFull && c.prepared ? 1 : 0, this.reduced ? 40 : 6, dt);
+        c.setFullness(THREE.MathUtils.clamp(s.full.value, 0, 1));
         c.step(dt, this.reduced ? 60 : isSel ? 3.2 : 6);
         if (s.leaving && s.presence.value < 0.003 && started) {
           this.scene.remove(c.group);
@@ -374,16 +380,6 @@ export class ArchiveScene {
       }
       if (col.leaving && col.slots.length === 0) this.columns.splice(ci, 1);
     }
-    // build the next and previous columns' interiors in the background (hidden until they reach the centre),
-    // nearest the selection first, so a switch only has to show them
-    ahead.sort((a, b) => Math.abs(a.index - this.rail.value) - Math.abs(b.index - this.rail.value));
-    const start = performance.now();
-    for (const s of ahead) {
-      s.cassette.build();
-      for (const t of s.cassette.textures) this.renderer.initTexture(t); // upload now, not on first show
-      if (performance.now() - start > BUILD_MS) break;
-    }
-
     // ---- decryption of the extracted file
     const sel = this.live().find((s) => s.index === this.selected);
     if (sel) {
@@ -436,6 +432,8 @@ export class ArchiveScene {
     this.camera.aspect = width / height;
     this.camera.lookAt(this.aim);
     this.camera.updateProjectionMatrix();
+    this.depthCamera.copy(this.camera);
+    this.depthCamera.layers.set(0);
 
     const fog = this.scene.fog as THREE.Fog;
     fog.near = DIST + THREE.MathUtils.lerp(4, -1, detail);
@@ -484,6 +482,47 @@ export class ArchiveScene {
     if (this.frame % 3 === 0) this.updateHover();
   }
 
+  /** Prepare files in the browser's idle time after each frame, so the work never lengthens a frame whatever the
+   * refresh rate (Safari has no requestIdleCallback: there, one slice per frame). */
+  private schedulePrepare() {
+    if (this.abort.signal.aborted) return;
+    if (typeof requestIdleCallback === "function")
+      requestIdleCallback(
+        (d) => {
+          this.prepareFiles(() => d.timeRemaining(), d.didTimeout);
+          this.schedulePrepare();
+        },
+        { timeout: 400 },
+      );
+    else
+      requestAnimationFrame(() => {
+        this.prepareFiles(() => 0, true);
+        this.schedulePrepare();
+      });
+  }
+
+  /** Get files ready to be shown in full, a slice at a time while `left()` ms remain (one slice when `force`d): near
+   * lanes first, then the far lanes, so a switch finds them ready. */
+  private prepareFiles(left: () => number, force: boolean) {
+    const todo: { s: Slot; lane: number }[] = [];
+    for (const col of this.columns) {
+      const lane = Math.abs(col.target);
+      if (col.leaving) continue;
+      for (const s of col.slots)
+        if (!s.leaving && !s.cassette.prepared && Math.abs(s.index - this.rail.value) < 34) todo.push({ s, lane });
+    }
+    if (!todo.length) return;
+    const dist = (s: Slot) => Math.abs(s.index - this.rail.value);
+    todo.sort((a, b) => a.lane - b.lane || dist(a.s) - dist(b.s));
+    let first = true;
+    for (const { s } of todo)
+      while (!s.cassette.prepared) {
+        if (!(first && force) && left() < 1.5) return; // a slice takes up to ~1.5 ms
+        first = false;
+        s.cassette.prepareStep(this.renderer, this.camera, this.scene);
+      }
+  }
+
   // ---------------------------------------------------------------- input
 
   private ndc = new THREE.Vector2(-9, -9);
@@ -529,6 +568,13 @@ export class ArchiveScene {
       { signal },
     );
     el.addEventListener("pointerleave", () => this.ndc.set(-9, -9), { signal });
+    el.addEventListener(
+      "webglcontextrestored",
+      () => {
+        for (const col of this.columns) for (const s of col.slots) s.cassette.unprepare();
+      },
+      { signal },
+    );
     el.addEventListener(
       "pointerdown",
       (e) => {

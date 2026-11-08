@@ -9,15 +9,26 @@
 //   name plate + photo ........... who it is (photo only when verified on an official UCSB page)
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 
 export const W = 4.0; // width (x)
 export const H = 3.7; // height (y); origin at the bottom centre
 export const D = 0.42; // thickness (z); the face looks down +z
+/** Layer of everything inside the glass. The depth-of-field pass leaves it out: the shell in front already
+ * gives that depth. */
+export const INTERIOR = 1;
 
 const BIG = { x: -0.5, y: 1.9, r: 0.9, tube: 0.095 };
 const SMALL = { x: 1.3, y: 1.3, r: 0.36, tube: 0.08 };
 const PHOTO = { x: 1.3, y: 2.64, w: 0.62, h: 0.76 };
 const NAME = { x: 0, y: 0.42, w: 3.44, h: 0.5 };
+// label and photo share one canvas (one texture, one draw call): label at the left, photo at the right
+const SHEET = {
+  w: 760,
+  h: 304,
+  label: { w: 512, h: 240 },
+  photo: { x: 512, w: 248, h: 304 },
+};
 
 export type CassetteData = {
   name: string;
@@ -90,6 +101,22 @@ export const DARK: Palette = {
 // Shared geometry (built once)
 
 let shared: ReturnType<typeof buildShared> | null = null;
+
+/** A copy of `g` moved by (x, y, z), with constant per-vertex attributes (to tell merged parts apart in a shader). */
+function part(g: THREE.BufferGeometry, x: number, y: number, z: number, attrs: Record<string, number[]> = {}) {
+  const c = g.clone().translate(x, y, z);
+  const n = c.attributes.position.count;
+  for (const [k, v] of Object.entries(attrs))
+    c.setAttribute(
+      k,
+      new THREE.Float32BufferAttribute(
+        new Float32Array(n * v.length).map((_, i) => v[i % v.length]),
+        v.length,
+      ),
+    );
+  return c;
+}
+
 function buildShared() {
   const shell = new RoundedBoxGeometry(W, H, D, 3, 0.07);
   shell.translate(0, H / 2, 0);
@@ -99,49 +126,50 @@ function buildShared() {
   const plate = new RoundedBoxGeometry(W - 0.34, H - 0.34, 0.05, 2, 0.03);
   plate.translate(0, H / 2, -D / 2 + 0.07);
   // arcs end where the shader discards, so the segment counts only shape the silhouette (< 0.1 px off at detail size)
-  const bigTrack = new THREE.TorusGeometry(BIG.r, BIG.tube, 12, 96);
-  const bigArc = new THREE.TorusGeometry(BIG.r, BIG.tube * 1.18, 12, 128);
+  const screw = new THREE.CylinderGeometry(0.075, 0.075, 0.05, 20).rotateX(Math.PI / 2);
+  // both ring tracks and both screws in one draw call; aPart 0 = ceramic, 1 = metal (see fixtureMaterial)
+  const fixtures = mergeGeometries([
+    part(new THREE.TorusGeometry(BIG.r, BIG.tube, 12, 96), BIG.x, BIG.y, -0.02, { aPart: [0] }),
+    part(new THREE.TorusGeometry(SMALL.r, SMALL.tube, 10, 64), SMALL.x, SMALL.y, -0.02, { aPart: [0] }),
+    part(screw, W / 2 - 0.22, H - 0.22, D / 2 - 0.01, { aPart: [1] }),
+    part(screw, -W / 2 + 0.22, 0.22, D / 2 - 0.01, { aPart: [1] }),
+  ])!;
+  // both copper arcs in one draw call; aArc = (ring centre, 0 big / 1 small) (see arcPairMaterial)
+  const arcs = mergeGeometries([
+    part(new THREE.TorusGeometry(BIG.r, BIG.tube * 1.18, 12, 128), BIG.x, BIG.y, -0.02, { aArc: [BIG.x, BIG.y, 0] }),
+    part(new THREE.TorusGeometry(SMALL.r, SMALL.tube * 1.2, 10, 80), SMALL.x, SMALL.y, -0.02, {
+      aArc: [SMALL.x, SMALL.y, 1],
+    }),
+  ])!;
   const band = new THREE.RingGeometry(BIG.r + 0.18, BIG.r + 0.28, 128, 1);
-  const smallTrack = new THREE.TorusGeometry(SMALL.r, SMALL.tube, 10, 64);
-  const smallArc = new THREE.TorusGeometry(SMALL.r, SMALL.tube * 1.2, 10, 80);
   const tick = new THREE.BoxGeometry(0.035, 0.22, 0.03);
-  const screw = new THREE.CylinderGeometry(0.075, 0.075, 0.05, 20);
-  screw.rotateX(Math.PI / 2);
   const block = new THREE.BoxGeometry(0.28, 0.07, 0.2);
-  const label = new THREE.PlaneGeometry(1.0, 0.46);
-  const photo = new THREE.PlaneGeometry(PHOTO.w, PHOTO.h);
+  // label and photo: two planes reading their halves of the sheet canvas (texture v runs bottom-up)
+  const label = part(new THREE.PlaneGeometry(1.0, 0.46), -1.3, 3.27, -0.04);
+  const photo = part(new THREE.PlaneGeometry(PHOTO.w, PHOTO.h), PHOTO.x, PHOTO.y, -0.04);
+  const remap = (g: THREE.BufferGeometry, f: (u: number, v: number) => [number, number]) => {
+    const uv = g.attributes.uv;
+    for (let i = 0; i < uv.count; i++) uv.setXY(i, ...f(uv.getX(i), uv.getY(i)));
+    return g;
+  };
+  const sheet = mergeGeometries([
+    remap(label, (u, v) => [(u * SHEET.label.w) / SHEET.w, 1 - ((1 - v) * SHEET.label.h) / SHEET.h]),
+    remap(photo, (u, v) => [(SHEET.photo.x + u * SHEET.photo.w) / SHEET.w, v]),
+  ])!;
   const name = new THREE.PlaneGeometry(NAME.w, NAME.h);
   const scan = new THREE.PlaneGeometry(1, 0.012);
-  // engraved guide lines on the plate, like a circuit trace
-  const pts: THREE.Vector3[] = [];
-  const z = -D / 2 + 0.1;
-  const seg = (a: [number, number], b: [number, number]) =>
-    pts.push(new THREE.Vector3(a[0], a[1], z), new THREE.Vector3(b[0], b[1], z));
-  seg([-1.75, 0.74], [0.9, 0.74]);
-  seg([0.9, 0.74], [1.02, 0.86]);
-  seg([1.75, 0.78], [1.75, 1.9]);
-  seg([0.92, 1.3], [0.82, 1.3]);
-  seg([-0.7, 3.42], [0.86, 3.42]);
-  seg([0.86, 3.42], [0.98, 3.3]);
-  for (let i = 0; i < 6; i++) seg([1.08 + i * 0.09, 0.78], [1.16 + i * 0.09, 0.9]);
-  const lines = new THREE.BufferGeometry().setFromPoints(pts);
   return {
     shell,
     fillerShell,
     plate,
-    bigTrack,
-    bigArc,
+    fixtures,
+    arcs,
     band,
-    smallTrack,
-    smallArc,
     tick,
-    screw,
     block,
-    label,
-    photo,
+    sheet,
     name,
     scan,
-    lines,
   };
 }
 
@@ -177,10 +205,84 @@ function arcMaterial(
   return m;
 }
 
+// Both copper arcs (big: estimate, small: P(above typical)) as one mesh; each runs from 12 o'clock to its own value.
+type ArcPairUniforms = {
+  uToBig: { value: number };
+  uToSmall: { value: number };
+};
+
+function arcPairMaterial(p: Palette): THREE.MeshPhysicalMaterial & { userData: { arc: ArcPairUniforms } } {
+  const m = new THREE.MeshPhysicalMaterial({
+    color: p.copper,
+    metalness: 0.5,
+    roughness: 0.3,
+    clearcoat: 0.4,
+  });
+  const arc: ArcPairUniforms = { uToBig: { value: 0 }, uToSmall: { value: 0 } };
+  m.userData.arc = arc;
+  m.onBeforeCompile = (shader) => {
+    shader.uniforms.uToBig = arc.uToBig;
+    shader.uniforms.uToSmall = arc.uToSmall;
+    shader.vertexShader =
+      "attribute vec3 aArc;\nvarying vec2 vArcPos;\nvarying float vArcId;\n" +
+      shader.vertexShader.replace(
+        "#include <begin_vertex>",
+        "#include <begin_vertex>\nvArcPos = position.xy - aArc.xy;\nvArcId = aArc.z;",
+      );
+    shader.fragmentShader =
+      "varying vec2 vArcPos;\nvarying float vArcId;\nuniform float uToBig;\nuniform float uToSmall;\n" +
+      shader.fragmentShader.replace(
+        "#include <clipping_planes_fragment>",
+        `#include <clipping_planes_fragment>
+        float turn = atan(vArcPos.x, vArcPos.y) / 6.2831853;
+        turn = turn < 0.0 ? turn + 1.0 : turn;
+        if (turn > (vArcId < 0.5 ? uToBig : uToSmall)) discard;`,
+      );
+  };
+  m.customProgramCacheKey = () => "arcPair";
+  return m as THREE.MeshPhysicalMaterial & {
+    userData: { arc: ArcPairUniforms };
+  };
+}
+
+// Ring tracks (ceramic) and screws (metal) in one mesh: per-vertex aPart picks colour, roughness and metalness.
+function fixtureMaterial(p: Palette) {
+  const glsl = (c: string) => {
+    const k = new THREE.Color(c); // linear, as the shader works
+    return `vec3(${k.r.toFixed(5)}, ${k.g.toFixed(5)}, ${k.b.toFixed(5)})`;
+  };
+  const m = new THREE.MeshStandardMaterial();
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader =
+      "attribute float aPart;\nvarying float vPart;\n" +
+      shader.vertexShader.replace("#include <begin_vertex>", "#include <begin_vertex>\nvPart = aPart;");
+    shader.fragmentShader =
+      "varying float vPart;\n" +
+      shader.fragmentShader
+        .replace(
+          "#include <color_fragment>",
+          `#include <color_fragment>\ndiffuseColor.rgb = mix(${glsl(p.ceramic)}, ${glsl("#b9b4ac")}, vPart);`,
+        )
+        .replace(
+          "#include <roughnessmap_fragment>",
+          "#include <roughnessmap_fragment>\nroughnessFactor = mix(0.55, 0.3, vPart);",
+        )
+        .replace(
+          "#include <metalnessmap_fragment>",
+          "#include <metalnessmap_fragment>\nmetalnessFactor = mix(0.0, 0.85, vPart);",
+        );
+  };
+  m.customProgramCacheKey = () => `fixtures-${p.ceramic}`;
+  return m;
+}
+
 // Shell glass: roughness clears from the top down as uReveal goes 0 → 1 (the "decryption").
 type GlassUniforms = { uReveal: { value: number }; uFrost: { value: number } };
 
-function glassMaterial(p: Palette): THREE.MeshPhysicalMaterial & { userData: { glass: GlassUniforms } } {
+function glassMaterial(
+  p: Palette,
+  glass: GlassUniforms = { uReveal: { value: 0 }, uFrost: { value: 0.6 } },
+): THREE.MeshPhysicalMaterial & { userData: { glass: GlassUniforms } } {
   const m = new THREE.MeshPhysicalMaterial({
     color: p.shell,
     transmission: 0.9,
@@ -193,7 +295,6 @@ function glassMaterial(p: Palette): THREE.MeshPhysicalMaterial & { userData: { g
     attenuationDistance: 2,
     envMapIntensity: 0.6,
   }) as THREE.MeshPhysicalMaterial & { userData: { glass: GlassUniforms } };
-  const glass: GlassUniforms = { uReveal: { value: 0 }, uFrost: { value: 0.6 } };
   m.userData.glass = glass;
   m.onBeforeCompile = (shader) => {
     shader.uniforms.uReveal = glass.uReveal;
@@ -231,10 +332,7 @@ export function fontFamily() {
   return v || "sans-serif";
 }
 
-function drawLabel(canvas: HTMLCanvasElement, d: CassetteData, p: Palette) {
-  const ctx = canvas.getContext("2d")!;
-  const w = canvas.width;
-  const h = canvas.height;
+function drawLabel(ctx: CanvasRenderingContext2D, w: number, h: number, d: CassetteData, p: Palette) {
   const font = fontFamily();
   ctx.fillStyle = p.label;
   ctx.fillRect(0, 0, w, h);
@@ -264,7 +362,7 @@ function drawLabel(canvas: HTMLCanvasElement, d: CassetteData, p: Palette) {
 
 /** Bottom name plate: large last name, smaller initials or given name, and the schedule status on the right. */
 function drawName(canvas: HTMLCanvasElement, d: CassetteData, p: Palette) {
-  const ctx = canvas.getContext("2d")!;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
   const w = canvas.width;
   const h = canvas.height;
   const font = fontFamily();
@@ -313,10 +411,14 @@ function drawName(canvas: HTMLCanvasElement, d: CassetteData, p: Palette) {
 }
 
 /** Photo frame: a warm monochrome print (the sources are low resolution), or initials when there is no verified photo. */
-function drawPhoto(canvas: HTMLCanvasElement, d: CassetteData, p: Palette, img?: HTMLImageElement) {
-  const ctx = canvas.getContext("2d")!;
-  const w = canvas.width;
-  const h = canvas.height;
+function drawPhoto(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  d: CassetteData,
+  p: Palette,
+  img?: HTMLImageElement,
+) {
   const font = fontFamily();
   ctx.fillStyle = p.label;
   ctx.fillRect(0, 0, w, h);
@@ -351,34 +453,51 @@ function drawPhoto(canvas: HTMLCanvasElement, d: CassetteData, p: Palette, img?:
   ctx.fillText(img ? "ID / DEPT PAGE" : "ID / NO PHOTO", pad, h - 14);
 }
 
+/** The label and photo, side by side on one canvas. */
+function drawSheet(canvas: HTMLCanvasElement, d: CassetteData, p: Palette, img?: HTMLImageElement) {
+  const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+  ctx.fillStyle = p.label;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  const region = (x: number, w: number, h: number, draw: () => void) => {
+    ctx.save();
+    ctx.translate(x, 0);
+    ctx.beginPath();
+    ctx.rect(0, 0, w, h);
+    ctx.clip();
+    draw();
+    ctx.restore();
+  };
+  region(0, SHEET.label.w, SHEET.label.h, () => drawLabel(ctx, SHEET.label.w, SHEET.label.h, d, p));
+  region(SHEET.photo.x, SHEET.photo.w, SHEET.photo.h, () => drawPhoto(ctx, SHEET.photo.w, SHEET.photo.h, d, p, img));
+}
+
 // Materials that are the same on every file, one set per palette (they live as long as the page).
 const common = new Map<Palette, ReturnType<typeof buildCommon>>();
 function buildCommon(p: Palette) {
   return {
     plate: new THREE.MeshStandardMaterial({ color: p.plate, roughness: 0.7 }),
-    ceramic: new THREE.MeshStandardMaterial({ color: p.ceramic, roughness: 0.55 }),
+    fixtures: fixtureMaterial(p),
     ink: new THREE.MeshStandardMaterial({ color: p.ink, roughness: 0.5 }),
-    metal: new THREE.MeshStandardMaterial({ color: "#b9b4ac", metalness: 0.85, roughness: 0.3 }),
-    lines: new THREE.LineBasicMaterial({ color: p.ceramic, transparent: true, opacity: 0.8 }),
   };
 }
 
 type Interior = {
-  bigArc: ReturnType<typeof arcMaterial>;
+  arcs: ReturnType<typeof arcPairMaterial>;
   band: ReturnType<typeof arcMaterial>;
-  smallArc: ReturnType<typeof arcMaterial>;
   tick: THREE.Mesh;
   scan: THREE.Mesh;
+  name: THREE.MeshBasicMaterial;
   objects: THREE.Object3D[];
-  canvases: { label: HTMLCanvasElement; name: HTMLCanvasElement; photo: HTMLCanvasElement };
-  textures: THREE.CanvasTexture[];
+  canvases: { sheet: HTMLCanvasElement; name: HTMLCanvasElement };
+  textures: THREE.CanvasTexture[]; // sheet, name
   materials: THREE.Material[];
 };
 
 export class Cassette {
   readonly group = new THREE.Group();
   readonly shell: THREE.Mesh;
-  private glass: ReturnType<typeof glassMaterial>;
+  private glass: ReturnType<typeof glassMaterial>; // see-through, for files shown in full
+  private liteGlass: ReturnType<typeof glassMaterial>; // opaque, for far lanes (no transmission pass)
   private blockMat: THREE.MeshStandardMaterial;
   private palette: Palette;
   private shadows: boolean;
@@ -386,6 +505,7 @@ export class Cassette {
   private inner: Interior | null = null;
   private photoImg?: HTMLImageElement;
   private lite = true;
+  private stage = 0; // preparation: 0 build, 1–2 upload each canvas, 3 compile, 4 ready
   data: CassetteData;
   /** shown values, sprung toward data so arcs sweep */
   private shown = { est: 0, lo: 0, hi: 0, p: 0, typical: 0 };
@@ -398,25 +518,50 @@ export class Cassette {
     this.palette = p;
     this.shadows = shadows;
     this.glass = glassMaterial(p);
-    this.glass.transmission = 0;
-    this.shell = new THREE.Mesh(g.shell, this.glass);
+    this.liteGlass = glassMaterial(p, this.glass.userData.glass);
+    this.liteGlass.transmission = 0;
+    this.shell = new THREE.Mesh(g.shell, this.liteGlass);
     this.shell.castShadow = shadows;
     this.shell.receiveShadow = shadows;
     this.shell.userData.cassette = this;
-    this.blockMat = new THREE.MeshStandardMaterial({ color: data.next ? p.next : p.past, roughness: 0.45 });
+    this.blockMat = new THREE.MeshStandardMaterial({
+      color: data.next ? p.next : p.past,
+      roughness: 0.45,
+    });
     const block = new THREE.Mesh(g.block, this.blockMat);
     block.position.set(-W / 2 + 0.55, H - 0.01, 0);
     this.group.add(this.shell, block);
     this.frost = frostFor(data);
-    this.shown = { est: 0, lo: data.typical, hi: data.typical, p: 0, typical: data.typical };
+    this.shown = {
+      est: 0,
+      lo: data.typical,
+      hi: data.typical,
+      p: 0,
+      typical: data.typical,
+    };
   }
 
-  get built() {
-    return this.inner !== null;
+  get prepared() {
+    return this.stage >= 4;
   }
 
-  get textures() {
-    return this.inner?.textures ?? [];
+  /** After a lost WebGL context is restored: everything uploaded or compiled is gone, so prepare again. */
+  unprepare() {
+    this.stage = Math.min(this.stage, this.inner ? 1 : 0);
+  }
+
+  /** One slice (≈1–2 ms) of getting ready to be shown in full: build, upload a canvas, or compile. */
+  prepareStep(renderer: THREE.WebGLRenderer, camera: THREE.Camera, scene: THREE.Scene) {
+    if (this.stage === 0) this.build();
+    else if (this.stage <= 2) renderer.initTexture(this.inner!.textures[this.stage - 1]);
+    else if (this.stage === 3) {
+      // the full look's materials, so the first frame that shows them does no setup
+      const m = this.shell.material;
+      this.shell.material = this.glass;
+      renderer.compile(this.group, camera, scene);
+      this.shell.material = m;
+    }
+    this.stage = Math.min(4, this.stage + 1);
   }
 
   /** Build the interior: plate, rings, plates with canvas text, photo. */
@@ -429,11 +574,9 @@ export class Cassette {
 
     const plate = new THREE.Mesh(g.plate, m.plate);
     plate.receiveShadow = this.shadows;
-    const bigTrack = new THREE.Mesh(g.bigTrack, m.ceramic);
-    bigTrack.position.set(BIG.x, BIG.y, -0.02);
-    const bigArcMat = arcMaterial({ color: p.copper, metalness: 0.5, roughness: 0.3, clearcoat: 0.4 });
-    const bigArc = new THREE.Mesh(g.bigArc, bigArcMat);
-    bigArc.position.copy(bigTrack.position);
+    const fixtures = new THREE.Mesh(g.fixtures, m.fixtures);
+    const arcsMat = arcPairMaterial(p);
+    const arcs = new THREE.Mesh(g.arcs, arcsMat);
     // opaque on purpose: transparent meshes are not visible through transmissive glass
     const bandMat = arcMaterial({
       color: new THREE.Color(p.plate).lerp(new THREE.Color(p.copper), 0.5),
@@ -445,65 +588,54 @@ export class Cassette {
     const tick = new THREE.Mesh(g.tick, m.ink);
     tick.position.z = 0.01;
 
-    const smallTrack = new THREE.Mesh(g.smallTrack, m.ceramic);
-    smallTrack.position.set(SMALL.x, SMALL.y, -0.02);
-    const smallArcMat = arcMaterial({ color: p.copper, metalness: 0.5, roughness: 0.3, clearcoat: 0.4 });
-    const smallArc = new THREE.Mesh(g.smallArc, smallArcMat);
-    smallArc.position.copy(smallTrack.position);
-
-    const screws = [
-      [W / 2 - 0.22, H - 0.22],
-      [-W / 2 + 0.22, 0.22],
-    ].map(([x, y]) => {
-      const s = new THREE.Mesh(g.screw, m.metal);
-      s.position.set(x, y, D / 2 - 0.01);
-      return s;
-    });
-
+    // CPU-backed canvases (willReadFrequently, set where they are drawn): uploading a GPU canvas to WebGL forces a
+    // synchronous readback, 1–30 ms each; from CPU memory it is a plain copy
     const canvas = (w: number, h: number) => Object.assign(document.createElement("canvas"), { width: w, height: h });
-    const canvases = { label: canvas(512, 240), name: canvas(1376, 200), photo: canvas(248, 304) };
-    drawLabel(canvases.label, data, p);
+    const canvases = {
+      sheet: canvas(SHEET.w, SHEET.h),
+      name: canvas(1376, 200),
+    };
+    drawSheet(canvases.sheet, data, p);
     drawName(canvases.name, data, p);
-    drawPhoto(canvases.photo, data, p);
-    const textures = [canvases.label, canvases.name, canvases.photo].map((c) => {
+    const textures = [canvases.sheet, canvases.name].map((c) => {
       const t = new THREE.CanvasTexture(c);
       t.colorSpace = THREE.SRGBColorSpace;
       t.anisotropy = 4;
       return t;
     });
-    const [labelMat, nameMat, photoMat] = textures.map(
-      (map) => new THREE.MeshBasicMaterial({ map, toneMapped: false }),
-    );
-    const label = new THREE.Mesh(g.label, labelMat);
-    label.position.set(-1.3, 3.27, -0.04);
+    const [sheetMat, nameMat] = textures.map((map) => new THREE.MeshBasicMaterial({ map, toneMapped: false }));
+    nameMat.transparent = true; // outside the glass: fades with it
+    const sheet = new THREE.Mesh(g.sheet, sheetMat);
     const name = new THREE.Mesh(g.name, nameMat);
     // printed on the outside of the glass, so the name stays sharp however frosted the file is
     name.position.set(NAME.x, NAME.y, D / 2 + 0.004);
-    const photo = new THREE.Mesh(g.photo, photoMat);
-    photo.position.set(PHOTO.x, PHOTO.y, -0.04);
 
-    const lines = new THREE.LineSegments(g.lines, m.lines);
-
-    const scanMat = new THREE.MeshBasicMaterial({ color: p.ink, transparent: true, opacity: 0, depthWrite: false });
+    const scanMat = new THREE.MeshBasicMaterial({
+      color: p.ink,
+      transparent: true,
+      opacity: 0,
+      depthWrite: false,
+    });
     const scan = new THREE.Mesh(g.scan, scanMat);
     scan.position.set(0, H / 2, D / 2 + 0.012);
     scan.rotation.z = Math.atan2(H * 0.74, W * 0.9);
     scan.renderOrder = 2;
     scan.visible = false;
 
-    const objects = [plate, bigTrack, bigArc, band, tick, smallTrack, smallArc, ...screws, label, name, photo, lines];
+    const objects = [plate, fixtures, arcs, band, tick, sheet, name];
     for (const o of objects) o.visible = !this.lite;
+    for (const o of [...objects, scan]) o.layers.set(INTERIOR);
     this.group.add(...objects, scan);
     this.inner = {
-      bigArc: bigArcMat,
+      arcs: arcsMat,
       band: bandMat,
-      smallArc: smallArcMat,
       tick,
       scan,
+      name: nameMat,
       objects,
       canvases,
       textures,
-      materials: [bigArcMat, bandMat, smallArcMat, labelMat, nameMat, photoMat, scanMat],
+      materials: [arcsMat, bandMat, sheetMat, nameMat, scanMat],
     };
     this.applyShown();
     this.loadPhoto();
@@ -514,9 +646,8 @@ export class Cassette {
   private redraw() {
     const i = this.inner;
     if (!i) return;
-    drawLabel(i.canvases.label, this.data, this.palette);
+    drawSheet(i.canvases.sheet, this.data, this.palette, this.photoImg);
     drawName(i.canvases.name, this.data, this.palette);
-    drawPhoto(i.canvases.photo, this.data, this.palette, this.photoImg);
     for (const t of i.textures) t.needsUpdate = true;
   }
 
@@ -529,8 +660,8 @@ export class Cassette {
       const i = this.inner;
       if (this.data.photo !== url || !i) return;
       this.photoImg = img;
-      drawPhoto(i.canvases.photo, this.data, this.palette, img);
-      i.textures[2].needsUpdate = true;
+      drawSheet(i.canvases.sheet, this.data, this.palette, img);
+      i.textures[0].needsUpdate = true;
     };
     img.src = url;
   }
@@ -552,27 +683,29 @@ export class Cassette {
     const i = this.inner;
     if (!i) return;
     const s = this.shown;
-    i.bigArc.userData.arc.uFrom.value = 0;
-    i.bigArc.userData.arc.uTo.value = s.est;
+    i.arcs.userData.arc.uToBig.value = s.est;
+    i.arcs.userData.arc.uToSmall.value = s.p;
     i.band.userData.arc.uFrom.value = s.lo;
     i.band.userData.arc.uTo.value = s.hi;
-    i.smallArc.userData.arc.uFrom.value = 0;
-    i.smallArc.userData.arc.uTo.value = s.p;
     const a = s.typical * Math.PI * 2;
     const r = BIG.r + 0.23;
     i.tick.position.set(BIG.x + Math.sin(a) * r, BIG.y + Math.cos(a) * r, 0.01);
     i.tick.rotation.z = -a;
   }
 
-  /** Lite: only the frosted shell and the status block (two draw calls instead of sixteen). Showing the interior
-   * builds it if needed. */
-  setLite(lite: boolean) {
-    if (lite === this.lite) return;
-    if (!lite) this.build();
-    this.lite = lite;
-    for (const o of this.inner?.objects ?? []) o.visible = !lite;
-    this.glass.transmission = lite ? 0 : 0.9;
-    this.glass.needsUpdate = true;
+  /** 0 = lite: an opaque shell and the status block (two draw calls instead of nine); up to 1 = the glass clears
+   * and the interior shows. Builds the interior if it was not prepared. */
+  setFullness(v: number) {
+    const lite = v < 0.002;
+    if (lite !== this.lite) {
+      if (!lite) this.build();
+      this.lite = lite;
+      for (const o of this.inner?.objects ?? []) o.visible = !lite;
+      this.shell.material = lite ? this.liteGlass : this.glass;
+    }
+    if (lite) return;
+    this.glass.transmission = 0.9 * v;
+    this.inner!.name.opacity = v;
   }
 
   /** reveal: 0 = frosted (in the drawer), 1 = decrypted (clear to this file's certainty). */
@@ -580,6 +713,7 @@ export class Cassette {
     this.glass.userData.glass.uReveal.value = reveal;
     this.glass.userData.glass.uFrost.value = frosted;
     this.glass.roughness = this.frost;
+    this.liteGlass.roughness = this.frost;
   }
 
   /** Diagonal scan line across the face: length 0..1, opacity 0..1. */
@@ -593,6 +727,7 @@ export class Cassette {
 
   dispose() {
     this.glass.dispose();
+    this.liteGlass.dispose();
     this.blockMat.dispose();
     this.inner?.materials.forEach((m) => m.dispose());
     this.inner?.textures.forEach((t) => t.dispose());
